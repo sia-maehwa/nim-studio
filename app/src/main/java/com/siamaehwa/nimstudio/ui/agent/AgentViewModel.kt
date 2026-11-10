@@ -10,6 +10,8 @@ import com.siamaehwa.nimstudio.core.ChatMessage
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.ToolCall
+import com.siamaehwa.nimstudio.core.ToolCallFunction
 import com.siamaehwa.nimstudio.core.agent.AgentTools
 import com.siamaehwa.nimstudio.core.agent.UndoInfo
 import com.siamaehwa.nimstudio.core.agent.Workspace
@@ -290,7 +292,16 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         ChatMessage(
                             role = "assistant",
                             content = assistantText.ifBlank { null },
-                            toolCalls = calls.ifEmpty { null },
+                            toolCalls = calls.ifEmpty { null }?.map { call ->
+                                ToolCall(
+                                    id = call.id,
+                                    type = "function",
+                                    function = ToolCallFunction(
+                                        name = call.name,
+                                        arguments = call.arguments,
+                                    ),
+                                )
+                            },
                         ),
                     )
 
