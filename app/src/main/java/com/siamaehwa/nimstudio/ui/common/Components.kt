@@ -30,14 +30,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import com.siamaehwa.nimstudio.core.InlineMarkdown
 import com.siamaehwa.nimstudio.core.MarkdownParser
 import com.siamaehwa.nimstudio.core.MdBlock
+import com.siamaehwa.nimstudio.core.MdInline
 import kotlinx.coroutines.delay
 
 @Composable
@@ -109,14 +118,59 @@ fun RenderedMarkdown(text: String, modifier: Modifier = Modifier) {
     Column(modifier) {
         MarkdownParser.parse(text).forEach { block ->
             when (block) {
-                is MdBlock.Paragraph -> Text(
-                    text = block.text,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp),
-                )
+                is MdBlock.Paragraph -> {
+                    val codeBg = MaterialTheme.colorScheme.surfaceVariant
+                    val linkColor = MaterialTheme.colorScheme.primary
+                    Text(
+                        text = buildAnnotatedString {
+                            appendInline(InlineMarkdown.parse(block.text), codeBg, linkColor)
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                    )
+                }
                 is MdBlock.Code -> CodeBlock(block.language, block.code)
+            }
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.appendInline(
+    tokens: List<MdInline>,
+    codeBg: Color,
+    linkColor: Color,
+) {
+    tokens.forEach { token ->
+        when (token) {
+            is MdInline.Text -> append(token.text)
+            is MdInline.Bold -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                appendInline(token.children, codeBg, linkColor)
+            }
+            is MdInline.Italic -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                appendInline(token.children, codeBg, linkColor)
+            }
+            is MdInline.Strike -> withStyle(
+                SpanStyle(textDecoration = TextDecoration.LineThrough),
+            ) {
+                appendInline(token.children, codeBg, linkColor)
+            }
+            is MdInline.Code -> withStyle(
+                SpanStyle(
+                    fontFamily = FontFamily.Monospace,
+                    background = codeBg,
+                ),
+            ) {
+                append(token.text)
+            }
+            is MdInline.Link -> withStyle(
+                SpanStyle(
+                    color = linkColor,
+                    textDecoration = TextDecoration.Underline,
+                ),
+            ) {
+                append(token.text)
             }
         }
     }

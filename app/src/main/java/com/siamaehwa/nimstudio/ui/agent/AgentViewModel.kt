@@ -13,9 +13,13 @@ import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.ToolCall
 import com.siamaehwa.nimstudio.core.ToolCallFunction
 import com.siamaehwa.nimstudio.core.agent.AgentTools
+import com.siamaehwa.nimstudio.core.agent.ToolOutcome
 import com.siamaehwa.nimstudio.core.agent.UndoInfo
 import com.siamaehwa.nimstudio.core.agent.Workspace
+import com.siamaehwa.nimstudio.core.plugin.PluginManifest
+import com.siamaehwa.nimstudio.core.plugin.PluginTool
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +27,23 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+
+data class AgentTodo(
+    val id: String,
+    val content: String,
+    val status: String,
+)
+
+data class AgentQuestion(
+    val question: String,
+    val options: List<String>,
+)
 
 data class AgentMsg(
     val id: Long,
@@ -48,8 +69,13 @@ data class AgentUiState(
     val messages: List<AgentMsg> = emptyList(),
     val running: Boolean = false,
     val step: Int = 0,
+    val todos: List<AgentTodo> = emptyList(),
+    val pendingQuestion: AgentQuestion? = null,
+    val pluginToolCount: Int = 0,
     val banner: String? = null,
 )
+
+private val TODO_STATUSES = setOf("pending", "in_progress", "completed", "cancelled")
 
 class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -62,6 +88,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     private val undoData = mutableMapOf<Long, UndoInfo>()
     private var nextId = 1L
     private var job: Job? = null
+    private var currentPlugins: List<PluginManifest> = emptyList()
+    private var questionDeferred: CompletableDeferred<String>? = null
 
     init {
         viewModelScope.launch {
@@ -84,6 +112,20 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
             val saved = runCatching { container.store.agentTreeUri.first() }.getOrNull()
             if (!saved.isNullOrBlank()) {
                 openWorkspace(Uri.parse(saved))
+            }
+        }
+        viewModelScope.launch {
+            container.plugins.reload()
+        }
+        viewModelScope.launch {
+            container.plugins.plugins.collect { list ->
+                currentPlugins = list
+                _state.update {
+                    it.copy(
+                        pluginToolCount = list.filter { plugin -> plugin.enabled }
+                            .sumOf { plugin -> plugin.tools.size },
+                    )
+                }
             }
         }
         refreshModels()
@@ -158,6 +200,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         workspaceTruncated = ws.truncated,
                         fileCount = ws.fileCount,
                         messages = emptyList(),
+                        todos = emptyList(),
                         banner = null,
                     )
                 }
@@ -185,12 +228,29 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         if (_state.value.running) return
         apiHistory.clear()
         undoData.clear()
-        _state.update { it.copy(messages = emptyList(), banner = null) }
+        _state.update {
+            it.copy(
+                messages = emptyList(),
+                todos = emptyList(),
+                pendingQuestion = null,
+                banner = null,
+            )
+        }
         addNotice("새 세션을 시작했습니다.")
     }
 
     fun stop() {
         job?.cancel()
+    }
+
+    fun answerQuestion(answer: String) {
+        val deferred = questionDeferred ?: return
+        val clean = answer.trim()
+        if (clean.isEmpty()) return
+        questionDeferred = null
+        _state.update { it.copy(pendingQuestion = null) }
+        addMessage(AgentMsg(id = nextId++, kind = "user", text = clean))
+        deferred.complete(clean)
     }
 
     fun undo(id: Long) {
@@ -240,12 +300,18 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(running = true, step = 0, banner = null) }
 
         job = viewModelScope.launch {
+            val coreToolNames = AgentTools.specs.map { it.function.name }.toSet()
+            val pluginSpecs = container.plugins.toolSpecs(currentPlugins)
+                .filter { it.function.name !in coreToolNames }
+            val specs = AgentTools.specs + pluginSpecs
             val rootListing = runCatching { ws.list("") }
                 .getOrNull()
                 ?.take(40)
                 ?.joinToString(", ") { if (it.isDir) it.name + "/" else it.name }
                 .orEmpty()
             var step = 0
+            var activeCalls: List<AgentToolCall> = emptyList()
+            val responded = mutableSetOf<String>()
             try {
                 while (true) {
                     step++
@@ -262,7 +328,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     var calls: List<AgentToolCall> = emptyList()
                     var lastUi = 0L
 
-                    container.repository.streamAgent(model, messages, AgentTools.specs)
+                    container.repository.streamAgent(model, messages, specs)
                         .collect { event ->
                             when (event) {
                                 is AgentStreamEvent.Content -> {
@@ -303,6 +369,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
                     if (calls.isEmpty()) break
 
+                    activeCalls = calls
+                    responded.clear()
                     for (call in calls) {
                         val toolId = nextId++
                         addMessage(
@@ -314,7 +382,22 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 streaming = true,
                             ),
                         )
-                        val outcome = runner.execute(call)
+                        val outcome = when (call.name) {
+                            "ask_user" -> handleAskUser(call)
+                            "todo_write" -> handleTodoWrite(call)
+                            else -> {
+                                val pluginTool = if (call.name in coreToolNames) {
+                                    null
+                                } else {
+                                    container.plugins.findTool(currentPlugins, call.name)
+                                }
+                                if (pluginTool != null) {
+                                    executePlugin(pluginTool, call)
+                                } else {
+                                    runner.execute(call)
+                                }
+                            }
+                        }
                         updateMessage(toolId) {
                             it.copy(
                                 text = outcome.summary + "\n" + outcome.detail,
@@ -331,12 +414,15 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 toolCallId = call.id,
                             ),
                         )
+                        responded.add(call.id)
                     }
                 }
             } catch (c: CancellationException) {
+                respondMissing(activeCalls, responded)
                 addNotice("작업을 중지했습니다.")
                 throw c
             } catch (t: Exception) {
+                respondMissing(activeCalls, responded)
                 addMessage(
                     AgentMsg(
                         id = nextId++,
@@ -345,8 +431,107 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     ),
                 )
             } finally {
-                _state.update { it.copy(running = false) }
+                questionDeferred = null
+                _state.update { it.copy(running = false, pendingQuestion = null) }
             }
+        }
+    }
+
+    private suspend fun handleAskUser(call: AgentToolCall): ToolOutcome {
+        val args = parseArgs(call.arguments)
+        val question = (args?.get("question") as? JsonPrimitive)?.contentOrNull?.trim()
+            ?.takeIf { it.isNotEmpty() } ?: "계속 진행할까요?"
+        val options = (args?.get("options") as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
+
+        val deferred = CompletableDeferred<String>()
+        questionDeferred = deferred
+        _state.update { it.copy(pendingQuestion = AgentQuestion(question, options)) }
+        try {
+            val answer = deferred.await()
+            return ToolOutcome(
+                summary = "ask_user · 답변",
+                detail = answer,
+                result = "사용자 답변: $answer",
+            )
+        } finally {
+            questionDeferred = null
+            _state.update { it.copy(pendingQuestion = null) }
+        }
+    }
+
+    private fun handleTodoWrite(call: AgentToolCall): ToolOutcome {
+        val args = parseArgs(call.arguments)
+        val array = args?.get("todos") as? JsonArray
+            ?: return ToolOutcome(
+                summary = "todo_write · 오류",
+                detail = "todos 배열이 필요합니다",
+                result = "ERROR: todos 배열이 필요합니다",
+                isError = true,
+            )
+        val todos = array.mapIndexedNotNull { index, element ->
+            val obj = element as? JsonObject ?: return@mapIndexedNotNull null
+            val content = (obj["content"] as? JsonPrimitive)?.contentOrNull?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: return@mapIndexedNotNull null
+            val id = (obj["id"] as? JsonPrimitive)?.contentOrNull?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: "t${index + 1}"
+            val status = (obj["status"] as? JsonPrimitive)?.contentOrNull?.lowercase()
+                ?.takeIf { it in TODO_STATUSES } ?: "pending"
+            AgentTodo(id, content, status)
+        }
+        _state.update { it.copy(todos = todos) }
+        val done = todos.count { it.status == "completed" }
+        val body = todos.joinToString("\n") { todo ->
+            val mark = when (todo.status) {
+                "completed" -> "[x]"
+                "in_progress" -> "[>]"
+                "cancelled" -> "[-]"
+                else -> "[ ]"
+            }
+            "$mark ${todo.content}"
+        }.ifBlank { "(빈 목록)" }
+        return ToolOutcome(
+            summary = "todo_write · $done/${todos.size} 완료",
+            detail = body,
+            result = "Todo list updated ($done/${todos.size})\n$body",
+        )
+    }
+
+    private suspend fun executePlugin(tool: PluginTool, call: AgentToolCall): ToolOutcome {
+        val args = parseArgs(call.arguments) ?: JsonObject(emptyMap())
+        return try {
+            val body = container.plugins.execute(tool, args)
+            ToolOutcome(
+                summary = "${call.name} · 완료",
+                detail = body.take(1500),
+                result = body,
+            )
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Exception) {
+            ToolOutcome(
+                summary = "${call.name} · 오류",
+                detail = t.message ?: "플러그인 실행 실패",
+                result = "ERROR: ${t.message ?: "플러그인 실행 실패"}",
+                isError = true,
+            )
+        }
+    }
+
+    private fun parseArgs(raw: String): JsonObject? =
+        runCatching { Json.parseToJsonElement(raw.ifBlank { "{}" }).jsonObject }.getOrNull()
+
+    private fun respondMissing(calls: List<AgentToolCall>, responded: Set<String>) {
+        calls.filter { it.id !in responded }.forEach { call ->
+            apiHistory.add(
+                ChatMessage(
+                    role = "tool",
+                    content = "ERROR: 작업이 중단되었습니다",
+                    toolCallId = call.id,
+                ),
+            )
         }
     }
 
@@ -358,6 +543,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         appendLine("- 경로는 항상 작업 폴더 기준 상대 경로로 쓰세요 (예: app/src/main/java/.../Main.kt).")
         appendLine("- 수정 전에 반드시 read_file로 현재 내용을 확인하세요.")
         appendLine("- 부분 수정은 edit_file(정확히 일치하는 old_string), 새 파일/전체 교체는 write_file을 쓰세요.")
+        appendLine("- 여러 단계 작업은 todo_write로 계획을 세우고, 진행할 때마다 전체 목록을 갱신하세요.")
+        appendLine("- 사용자 결정이 필요하면 ask_user로 질문하세요. 선택지를 options에 넣으면 버튼으로 표시됩니다.")
         appendLine("- 셸/터미널은 없습니다. 빌드·실행은 사용자가 Termux에서 직접 합니다.")
         appendLine("- 요청이 모호하면 한 번만 짧게 되물어보세요.")
         appendLine("- 답변은 한국어로 간결하게. 작업 후 바꾼 파일을 요약하세요.")

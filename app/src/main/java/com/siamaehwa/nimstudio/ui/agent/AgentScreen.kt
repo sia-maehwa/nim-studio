@@ -9,6 +9,7 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,16 +32,25 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -50,6 +60,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -66,6 +77,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -192,17 +204,30 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                     }
                 }
 
-                AgentInputBar(
-                    draft = draft,
-                    onDraftChange = { draft = it },
-                    running = state.running,
-                    onSend = {
-                        val text = draft
-                        draft = ""
-                        vm.send(text)
-                    },
-                    onStop = vm::stop,
-                )
+                if (state.todos.isNotEmpty()) {
+                    TodoPanel(todos = state.todos)
+                }
+
+                val question = state.pendingQuestion
+                if (question != null) {
+                    QuestionCard(
+                        question = question,
+                        onAnswer = vm::answerQuestion,
+                        onCancel = vm::stop,
+                    )
+                } else {
+                    AgentInputBar(
+                        draft = draft,
+                        onDraftChange = { draft = it },
+                        running = state.running,
+                        onSend = {
+                            val text = draft
+                            draft = ""
+                            vm.send(text)
+                        },
+                        onStop = vm::stop,
+                    )
+                }
             }
         }
     }
@@ -405,6 +430,156 @@ private fun BannerBar(message: String, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun QuestionCard(
+    question: AgentQuestion,
+    onAnswer: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var draft by rememberSaveable(question.question) { mutableStateOf("") }
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.HelpOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "확인이 필요합니다",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            Text(
+                question.question,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            question.options.forEach { option ->
+                OutlinedButton(
+                    onClick = { onAnswer(option) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(option)
+                }
+            }
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                placeholder = { Text("직접 입력") },
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 3,
+                shape = RoundedCornerShape(12.dp),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onCancel) { Text("작업 취소") }
+                Spacer(Modifier.weight(1f))
+                Button(
+                    onClick = { onAnswer(draft) },
+                    enabled = draft.isNotBlank(),
+                ) {
+                    Text("답변")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TodoPanel(todos: List<AgentTodo>) {
+    var expanded by rememberSaveable { mutableStateOf(true) }
+    val done = todos.count { it.status == "completed" }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+            ) {
+                Icon(
+                    Icons.Filled.Checklist,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "할 일 $done/${todos.size}",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (expanded) "접기" else "펼치기",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (expanded) {
+                todos.forEach { todo ->
+                    Row(
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Icon(
+                            imageVector = todoIcon(todo.status),
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = todoTint(todo.status),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            todo.content,
+                            style = MaterialTheme.typography.bodySmall,
+                            textDecoration = if (todo.status == "completed") {
+                                TextDecoration.LineThrough
+                            } else {
+                                null
+                            },
+                            color = if (todo.status == "cancelled") {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun todoIcon(status: String): ImageVector = when (status) {
+    "completed" -> Icons.Filled.CheckCircle
+    "in_progress" -> Icons.Filled.RadioButtonChecked
+    "cancelled" -> Icons.Filled.Cancel
+    else -> Icons.Filled.Circle
+}
+
+@Composable
+private fun todoTint(status: String) = when (status) {
+    "completed", "in_progress" -> MaterialTheme.colorScheme.primary
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
 }
 
 @Composable

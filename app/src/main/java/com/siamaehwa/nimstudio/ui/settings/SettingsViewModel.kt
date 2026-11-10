@@ -6,6 +6,7 @@ import com.siamaehwa.nimstudio.AppContainer
 import com.siamaehwa.nimstudio.core.ConnectionCheck
 import com.siamaehwa.nimstudio.core.KeyFormat
 import com.siamaehwa.nimstudio.core.NimStore
+import com.siamaehwa.nimstudio.core.plugin.PluginManifest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,6 +27,8 @@ data class SettingsUiState(
     val baseUrlInput: String = NimStore.DEFAULT_BASE_URL,
     val checking: Boolean = false,
     val result: CheckResult? = null,
+    val plugins: List<PluginManifest> = emptyList(),
+    val pluginMessage: String? = null,
 )
 
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
@@ -34,6 +37,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     init {
+        viewModelScope.launch { container.plugins.reload() }
+        viewModelScope.launch {
+            container.plugins.plugins.collect { list ->
+                _state.update { it.copy(plugins = list) }
+            }
+        }
         viewModelScope.launch {
             val key = container.store.apiKey.first()
             val base = container.store.baseUrl.first()
@@ -89,6 +98,31 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.store.clearApiKey()
             _state.update { it.copy(keyInput = "", hasStoredKey = false, result = null) }
+        }
+    }
+
+    fun addPlugin(raw: String) {
+        viewModelScope.launch {
+            val result = container.plugins.addFromJson(raw)
+            _state.update {
+                it.copy(
+                    pluginMessage = result.fold(
+                        onSuccess = { count -> "플러그인 ${count}개를 저장했습니다." },
+                        onFailure = { error -> "추가 실패: ${error.message}" },
+                    ),
+                )
+            }
+        }
+    }
+
+    fun togglePlugin(name: String, enabled: Boolean) {
+        viewModelScope.launch { container.plugins.setEnabled(name, enabled) }
+    }
+
+    fun removePlugin(name: String) {
+        viewModelScope.launch {
+            container.plugins.remove(name)
+            _state.update { it.copy(pluginMessage = "삭제했습니다: $name") }
         }
     }
 }

@@ -78,6 +78,23 @@ class AgentTools(private val workspace: Workspace) {
                     str("path", "검색 범위 상대 경로(기본 \".\")")
                 },
             ),
+            tool(
+                name = "ask_user",
+                description = "작업 방향이 모호하거나 사용자 결정이 필요할 때 질문합니다. options가 있으면 버튼으로 표시됩니다.",
+                required = listOf("question"),
+                params = {
+                    str("question", "사용자에게 할 질문")
+                    strArray("options", "선택지 목록(선택). 비우면 직접 입력")
+                },
+            ),
+            tool(
+                name = "todo_write",
+                description = "여러 단계 작업의 계획/진행 상황을 todo 목록으로 관리합니다. 호출할 때마다 전체 목록을 전달하세요.",
+                required = listOf("todos"),
+                params = {
+                    todoArray("todos", "전체 todo 목록(항상 전체를 전달)")
+                },
+            ),
         )
 
         private fun tool(
@@ -115,6 +132,36 @@ class AgentTools(private val workspace: Workspace) {
             putJsonObject(name) {
                 put("type", "boolean")
                 put("description", description)
+            }
+
+        private fun JsonObjectBuilder.strArray(name: String, description: String) =
+            putJsonObject(name) {
+                put("type", "array")
+                put("description", description)
+                putJsonObject("items") { put("type", "string") }
+            }
+
+        private fun JsonObjectBuilder.todoArray(name: String, description: String) =
+            putJsonObject(name) {
+                put("type", "array")
+                put("description", description)
+                putJsonObject("items") {
+                    put("type", "object")
+                    putJsonObject("properties") {
+                        str("id", "항목 ID(문자열)")
+                        str("content", "할 일 내용")
+                        putJsonObject("status") {
+                            put("type", "string")
+                            putJsonArray("enum") {
+                                listOf("pending", "in_progress", "completed", "cancelled")
+                                    .forEach { add(JsonPrimitive(it)) }
+                            }
+                        }
+                    }
+                    putJsonArray("required") {
+                        listOf("id", "content", "status").forEach { add(JsonPrimitive(it)) }
+                    }
+                }
             }
     }
 
