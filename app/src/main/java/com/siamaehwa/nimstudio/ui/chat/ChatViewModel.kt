@@ -8,8 +8,11 @@ import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.NimStreamEvent
+import com.siamaehwa.nimstudio.core.db.ConversationEntity
+import com.siamaehwa.nimstudio.core.db.MessageEntity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -18,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class ChatPreset(val label: String, val systemPrompt: String) {
     General(
@@ -48,9 +52,15 @@ data class ChatUiState(
     val streaming: Boolean = false,
     val hasKey: Boolean? = null,
     val banner: String? = null,
+    val notice: String? = null,
+    val conversationId: Long? = null,
+    val conversations: List<ConversationEntity> = emptyList(),
 )
 
 class ChatViewModel(private val container: AppContainer) : ViewModel() {
+
+    private val dao = container.conversations
+    private val library = container.library
 
     private val _state = MutableStateFlow(ChatUiState())
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
@@ -66,8 +76,25 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         }
         viewModelScope.launch {
             container.store.lastModel.collect { saved ->
-                if (!saved.isNullOrBlank()) {
+                if (!saved.isNullOrBlank() && _state.value.selectedModel == null) {
                     _state.update { it.copy(selectedModel = saved) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            dao.observeAll().collect { list ->
+                _state.update { it.copy(conversations = list) }
+            }
+        }
+        viewModelScope.launch {
+            runCatching {
+                val latest = dao.latest() ?: return@runCatching
+                val msgs = dao.messages(latest.id)
+                if (msgs.isNotEmpty() && _state.value.messages.isEmpty()) {
+                    val mapped = msgs.map { m -> ChatMsg(nextId++, m.role, m.content, m.reasoning) }
+                    _state.update {
+                        it.copy(conversationId = latest.id, messages = mapped)
+                    }
                 }
             }
         }
@@ -123,13 +150,51 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(preset = preset) }
     }
 
-    fun clearChat() {
+    fun newChat() {
         if (_state.value.streaming) return
-        _state.update { it.copy(messages = emptyList(), banner = null) }
+        _state.update {
+            it.copy(
+                conversationId = null,
+                messages = emptyList(),
+                banner = null,
+                notice = null,
+            )
+        }
+    }
+
+    fun openConversation(id: Long) {
+        if (_state.value.streaming) return
+        viewModelScope.launch {
+            val msgs = dao.messages(id)
+            val mapped = msgs.map { m -> ChatMsg(nextId++, m.role, m.content, m.reasoning) }
+            _state.update {
+                it.copy(
+                    conversationId = id,
+                    messages = mapped,
+                    banner = null,
+                    notice = null,
+                )
+            }
+        }
+    }
+
+    fun deleteConversation(id: Long) {
+        viewModelScope.launch {
+            dao.delete(id)
+            if (_state.value.conversationId == id) {
+                _state.update {
+                    it.copy(conversationId = null, messages = emptyList())
+                }
+            }
+        }
     }
 
     fun dismissBanner() {
         _state.update { it.copy(banner = null) }
+    }
+
+    fun dismissNotice() {
+        _state.update { it.copy(notice = null) }
     }
 
     fun stop() {
@@ -158,12 +223,28 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     ChatMsg(id = assistantId, role = "assistant", content = "", streaming = true),
                 streaming = true,
                 banner = null,
+                notice = null,
             )
         }
 
         val turns = buildTurns(snapshot.preset.systemPrompt, snapshot.messages + userMsg)
 
         streamJob = viewModelScope.launch {
+            val convId = runCatching { ensureConversation(prompt, model) }.getOrNull()
+            if (convId != null) {
+                runCatching {
+                    dao.insertMessage(
+                        MessageEntity(
+                            conversationId = convId,
+                            role = "user",
+                            content = prompt,
+                            model = model,
+                            createdAt = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+            }
+
             val content = StringBuilder()
             val reasoning = StringBuilder()
             val channel = Channel<Pair<Boolean, String>>(Channel.UNLIMITED)
@@ -209,6 +290,11 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     detail = null,
                 )
                 _state.update { it.copy(streaming = false) }
+                if (convId != null) {
+                    withContext(NonCancellable) {
+                        persistAssistant(convId, model, content.toString(), reasoning.toString())
+                    }
+                }
             } catch (c: CancellationException) {
                 producer.cancel()
                 updateAssistant(
@@ -219,6 +305,11 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     detail = null,
                 )
                 _state.update { it.copy(streaming = false) }
+                if (convId != null) {
+                    withContext(NonCancellable) {
+                        persistAssistant(convId, model, content.toString(), reasoning.toString())
+                    }
+                }
                 throw c
             } catch (t: Exception) {
                 producer.cancel()
@@ -243,7 +334,102 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                         },
                     )
                 }
+                if (convId != null && hasText) {
+                    persistAssistant(convId, model, content.toString(), reasoning.toString())
+                }
             }
+        }
+    }
+
+    private suspend fun ensureConversation(firstPrompt: String, model: String): Long {
+        val existing = _state.value.conversationId
+        if (existing != null) return existing
+        val now = System.currentTimeMillis()
+        val id = dao.insertConversation(
+            ConversationEntity(
+                title = titleFrom(firstPrompt),
+                model = model,
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+        _state.update { it.copy(conversationId = id) }
+        return id
+    }
+
+    private suspend fun persistAssistant(
+        conversationId: Long,
+        model: String,
+        content: String,
+        reasoning: String,
+    ) {
+        if (content.isBlank() && reasoning.isBlank()) return
+        dao.insertMessage(
+            MessageEntity(
+                conversationId = conversationId,
+                role = "assistant",
+                content = content,
+                reasoning = reasoning,
+                model = model,
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+        dao.touch(conversationId, System.currentTimeMillis())
+    }
+
+    private fun titleFrom(prompt: String): String =
+        prompt.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(40) ?: "새 대화"
+
+    fun saveMessageToLibrary(msg: ChatMsg) {
+        val content = msg.content.trim()
+        if (content.isEmpty()) return
+        viewModelScope.launch {
+            val kind = if (content.contains("```")) "code" else "text"
+            val firstLine = content.lineSequence()
+                .firstOrNull { it.isNotBlank() }
+                ?.trim()
+                ?.take(60)
+                ?: "답변"
+            runCatching {
+                library.saveText(
+                    kind = kind,
+                    title = firstLine,
+                    content = content,
+                    source = "채팅 · ${_state.value.selectedModel ?: ""}",
+                )
+            }
+            _state.update { it.copy(notice = "라이브러리에 저장했습니다") }
+        }
+    }
+
+    fun exportConversation() {
+        val snapshot = _state.value
+        if (snapshot.messages.isEmpty()) return
+        val title = snapshot.conversations
+            .firstOrNull { it.id == snapshot.conversationId }
+            ?.title
+            ?: "대화"
+        viewModelScope.launch {
+            val markdown = buildString {
+                append("# ").append(title).append("\n\n")
+                snapshot.messages
+                    .filter { it.role == "user" || it.role == "assistant" }
+                    .filter { it.content.isNotBlank() }
+                    .forEach { m ->
+                        append("## ").append(if (m.role == "user") "사용자" else "어시스턴트")
+                        append("\n\n")
+                        append(m.content).append("\n\n")
+                    }
+            }
+            runCatching {
+                library.saveText(
+                    kind = "text",
+                    title = "대화 · $title",
+                    content = markdown,
+                    source = "채팅 내보내기",
+                )
+            }
+            _state.update { it.copy(notice = "대화를 라이브러리에 저장했습니다") }
         }
     }
 

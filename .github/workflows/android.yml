@@ -35,11 +35,11 @@ jobs:
       - name: Build and test
         run: bash tools/build-apk.sh
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: nim-studio-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: nim-studio-apks
+          path: app/build/outputs/apk/*/*.apk
           if-no-files-found: error
 
       - name: Upload build log
@@ -57,8 +57,10 @@ jobs:
           tag_name: rolling-latest
           name: "최신 빌드 (rolling)"
           body: |
-            자동 빌드된 debug APK입니다. 기기에서 바로 설치할 수 있습니다.
+            자동 빌드된 APK입니다. `app-release.apk`(서명·최적화) 설치를 권장합니다.
             커밋: ${{ github.sha }}
           prerelease: true
           make_latest: "false"
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk

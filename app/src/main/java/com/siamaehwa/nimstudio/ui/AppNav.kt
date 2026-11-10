@@ -83,7 +83,7 @@ fun AppRoot() {
                 ChatScreen(onOpenSettings = { navController.switchTab("settings") })
             }
             composable("image") {
-                ImageScreen()
+                ImageScreen(onOpenSettings = { navController.switchTab("settings") })
             }
             composable("models") {
                 ModelsScreen(onOpenChat = { navController.switchTab("chat") })

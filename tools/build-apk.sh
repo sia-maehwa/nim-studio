@@ -61,8 +61,10 @@ if [[ -z "$GRADLE_BIN" ]]; then
     fi
 fi
 
-"$GRADLE_BIN" -p "$PROJECT_ROOT" testDebugUnitTest assembleDebug
+"$GRADLE_BIN" -p "$PROJECT_ROOT" testDebugUnitTest assembleDebug assembleRelease
 
-APK="$PROJECT_ROOT/app/build/outputs/apk/debug/app-debug.apk"
-[[ -f "$APK" ]] || fail "Gradle가 성공했지만 APK 산출물을 찾지 못했습니다: $APK"
-printf '\nAPK 생성 완료:\n%s\n' "$APK"
+DEBUG_APK="$PROJECT_ROOT/app/build/outputs/apk/debug/app-debug.apk"
+RELEASE_APK="$PROJECT_ROOT/app/build/outputs/apk/release/app-release.apk"
+[[ -f "$DEBUG_APK" ]] || fail "Gradle가 성공했지만 debug APK를 찾지 못했습니다: $DEBUG_APK"
+[[ -f "$RELEASE_APK" ]] || fail "Gradle가 성공했지만 release APK를 찾지 못했습니다: $RELEASE_APK"
+printf '\nAPK 생성 완료:\n%s\n%s\n' "$DEBUG_APK" "$RELEASE_APK"

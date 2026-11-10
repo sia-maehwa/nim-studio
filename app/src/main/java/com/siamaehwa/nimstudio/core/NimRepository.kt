@@ -54,6 +54,12 @@ class NimRepository(
         }
     }
 
+    suspend fun generateImages(params: ImageGenParams): List<GeneratedImage> {
+        val key = store.apiKey.first() ?: throw MissingApiKeyException()
+        val base = store.baseUrl.first()
+        return client.generateImages(key, base, params)
+    }
+
     fun stream(
         model: String,
         turns: List<ChatTurn>,

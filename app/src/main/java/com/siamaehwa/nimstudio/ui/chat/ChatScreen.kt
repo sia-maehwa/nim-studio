@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,9 +34,12 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -49,6 +53,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -72,9 +77,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.siamaehwa.nimstudio.NimStudioApp
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.db.ConversationEntity
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
 import com.siamaehwa.nimstudio.ui.common.RenderedMarkdown
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlinx.coroutines.delay
 
 @Composable
@@ -83,6 +93,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     val vm: ChatViewModel = viewModel { ChatViewModel(app.container) }
     val state by vm.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
+    var showConversations by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -90,6 +101,9 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
             title = "채팅",
             subtitle = state.selectedModel ?: "모델을 선택하세요",
         ) {
+            IconButton(onClick = { showConversations = true }) {
+                Icon(Icons.Filled.History, contentDescription = "대화 목록")
+            }
             ModelPicker(
                 models = state.chatModels,
                 selected = state.selectedModel,
@@ -97,7 +111,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 onPick = vm::pickModel,
                 onRefresh = vm::refreshModels,
             )
-            TextButton(onClick = vm::clearChat, enabled = !state.streaming) {
+            TextButton(onClick = vm::newChat, enabled = !state.streaming) {
                 Text("새 대화")
             }
         }
@@ -105,6 +119,11 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         val banner = state.banner
         if (banner != null) {
             BannerBar(banner, onDismiss = vm::dismissBanner)
+        }
+
+        val notice = state.notice
+        if (notice != null) {
+            NoticeBar(notice, onDismiss = vm::dismissNotice)
         }
 
         if (state.hasKey == false) {
@@ -136,7 +155,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(items = reversed, key = { it.id }) { msg ->
-                    MessageItem(msg)
+                    MessageItem(msg, onSaveToLibrary = { vm.saveMessageToLibrary(msg) })
                 }
             }
 
@@ -153,14 +172,172 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
             )
         }
     }
+
+    if (showConversations) {
+        ModalBottomSheet(onDismissRequest = { showConversations = false }) {
+            ConversationSheet(
+                conversations = state.conversations,
+                currentId = state.conversationId,
+                hasMessages = state.messages.isNotEmpty(),
+                onOpen = { id ->
+                    showConversations = false
+                    vm.openConversation(id)
+                },
+                onDelete = vm::deleteConversation,
+                onExport = {
+                    showConversations = false
+                    vm.exportConversation()
+                },
+                onNew = {
+                    showConversations = false
+                    vm.newChat()
+                },
+            )
+        }
+    }
 }
 
 @Composable
-private fun MessageItem(msg: ChatMsg) {
+private fun ConversationSheet(
+    conversations: List<ConversationEntity>,
+    currentId: Long?,
+    hasMessages: Boolean,
+    onOpen: (Long) -> Unit,
+    onDelete: (Long) -> Unit,
+    onExport: () -> Unit,
+    onNew: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 20.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "대화 목록",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onNew) { Text("새 대화") }
+        }
+        HorizontalDivider()
+        if (conversations.isEmpty()) {
+            Text(
+                "저장된 대화가 없습니다",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(16.dp),
+            )
+        } else {
+            LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                items(items = conversations, key = { it.id }) { conversation ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpen(conversation.id) }
+                            .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    conversation.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (conversation.id == currentId) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        "현재",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
+                            Text(
+                                "${formatChatDate(conversation.updatedAt)} · ${conversation.model}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        IconButton(onClick = { onDelete(conversation.id) }) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = "대화 삭제",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    )
+                }
+            }
+        }
+        HorizontalDivider()
+        TextButton(
+            onClick = onExport,
+            enabled = hasMessages,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        ) {
+            Text("현재 대화를 라이브러리에 내보내기")
+        }
+    }
+}
+
+@Composable
+private fun NoticeBar(message: String, onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = "닫기",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+        }
+    }
+}
+
+private val chatDateFormatter = DateTimeFormatter
+    .ofPattern("M월 d일 HH:mm", Locale.KOREA)
+    .withZone(ZoneId.systemDefault())
+
+private fun formatChatDate(ms: Long): String =
+    chatDateFormatter.format(Instant.ofEpochMilli(ms))
+
+@Composable
+private fun MessageItem(msg: ChatMsg, onSaveToLibrary: () -> Unit) {
     when (msg.role) {
         "user" -> UserBubble(msg)
         "error" -> ErrorBubble(msg)
-        else -> AssistantMessage(msg)
+        else -> AssistantMessage(msg, onSaveToLibrary)
     }
 }
 
@@ -185,7 +362,7 @@ private fun UserBubble(msg: ChatMsg) {
 }
 
 @Composable
-private fun AssistantMessage(msg: ChatMsg) {
+private fun AssistantMessage(msg: ChatMsg, onSaveToLibrary: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (msg.reasoning.isNotBlank()) {
             ReasoningBlock(msg.reasoning, live = msg.streaming)
@@ -217,7 +394,7 @@ private fun AssistantMessage(msg: ChatMsg) {
             )
         }
         if (!msg.streaming && msg.content.isNotBlank()) {
-            MessageCopyRow(msg.content)
+            MessageCopyRow(msg.content, onSaveToLibrary)
         }
     }
 }
@@ -313,13 +490,20 @@ private fun BlinkingCursor() {
 }
 
 @Composable
-private fun MessageCopyRow(text: String) {
+private fun MessageCopyRow(text: String, onSaveToLibrary: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     var copied by remember { mutableStateOf(false) }
+    var saved by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
             delay(1500)
             copied = false
+        }
+    }
+    LaunchedEffect(saved) {
+        if (saved) {
+            delay(1500)
+            saved = false
         }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -333,6 +517,20 @@ private fun MessageCopyRow(text: String) {
             Icon(
                 imageVector = if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy,
                 contentDescription = "답변 복사",
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(
+            onClick = {
+                onSaveToLibrary()
+                saved = true
+            },
+            modifier = Modifier.size(28.dp),
+        ) {
+            Icon(
+                imageVector = if (saved) Icons.Filled.Check else Icons.Filled.BookmarkAdd,
+                contentDescription = "라이브러리에 저장",
                 modifier = Modifier.size(15.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )

@@ -1,5 +1,6 @@
 package com.siamaehwa.nimstudio.core
 
+import android.util.Base64
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
@@ -11,6 +12,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,6 +31,20 @@ sealed interface NimStreamEvent {
 data class ChatTurn(
     val role: String,
     val content: String,
+)
+
+data class ImageGenParams(
+    val model: String,
+    val prompt: String,
+    val negativePrompt: String = "",
+    val width: Int = 1024,
+    val height: Int = 1024,
+    val steps: Int = 30,
+    val seed: Long? = null,
+)
+
+data class GeneratedImage(
+    val bytes: ByteArray,
 )
 
 class NimClient {
@@ -142,6 +162,89 @@ class NimClient {
             }
         }
     }.flowOn(Dispatchers.IO)
+
+    suspend fun generateImages(
+        apiKey: String,
+        baseUrl: String,
+        params: ImageGenParams,
+    ): List<GeneratedImage> = withContext(Dispatchers.IO) {
+        val payload = buildJsonObject {
+            put("model", params.model)
+            put("prompt", params.prompt)
+            if (params.negativePrompt.isNotBlank()) {
+                put("negative_prompt", params.negativePrompt)
+            }
+            put("width", params.width)
+            put("height", params.height)
+            put("steps", params.steps)
+            if (params.seed != null) {
+                put("seed", params.seed)
+            }
+            put("n", 1)
+        }.toString()
+
+        val request = Request.Builder()
+            .url(normalizeBase(baseUrl) + "/images/generations")
+            .header("Authorization", "Bearer $apiKey")
+            .header("Accept", "application/json")
+            .post(payload.toRequestBody(jsonMedia))
+            .build()
+
+        val call = http.newCall(request)
+        coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+
+        call.execute().use { response ->
+            val bodyText = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw apiException(response.code, bodyText)
+
+            val root = runCatching { json.parseToJsonElement(bodyText) as JsonObject }
+                .getOrElse { throw IOException("이미지 응답을 해석할 수 없습니다") }
+            val items = (root["data"] as? JsonArray)
+                ?: (root["artifacts"] as? JsonArray)
+                ?: JsonArray(emptyList())
+
+            val images = mutableListOf<GeneratedImage>()
+            for (element in items) {
+                val obj = element as? JsonObject ?: continue
+                val encoded = obj.stringOrNull("b64_json") ?: obj.stringOrNull("base64")
+                val raw = obj.stringOrNull("image")
+                val url = obj.stringOrNull("url") ?: obj.stringOrNull("image_url")
+
+                val bytes = when {
+                    encoded != null -> decodeBase64(encoded)
+                    raw != null && raw.startsWith("http") -> downloadImage(raw)
+                    raw != null -> decodeBase64(raw)
+                    url != null -> downloadImage(url)
+                    else -> null
+                }
+                if (bytes != null) images.add(GeneratedImage(bytes))
+            }
+
+            if (images.isEmpty()) {
+                throw IOException("응답에 이미지 데이터가 없습니다: " + bodyText.take(200))
+            }
+            images
+        }
+    }
+
+    private fun JsonObject.stringOrNull(key: String): String? {
+        val primitive = this[key] as? JsonPrimitive ?: return null
+        return if (primitive.isString) primitive.content else null
+    }
+
+    private fun decodeBase64(value: String): ByteArray? =
+        runCatching { Base64.decode(value, Base64.DEFAULT) }.getOrNull()
+
+    private fun downloadImage(url: String): ByteArray? = runCatching {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "image/*")
+            .get()
+            .build()
+        http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) null else response.body?.bytes()
+        }
+    }.getOrNull()
 
     private fun normalizeBase(baseUrl: String): String = baseUrl.trim().trimEnd('/')
 
