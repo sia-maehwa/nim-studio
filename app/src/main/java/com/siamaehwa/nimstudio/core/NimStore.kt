@@ -18,6 +18,7 @@ class NimStore(private val context: Context) {
         private val KEY_LAST_MODEL = stringPreferencesKey("last_model")
         private val KEY_AGENT_TREE = stringPreferencesKey("agent_tree_uri")
         private val KEY_AGENT_MODEL = stringPreferencesKey("agent_model")
+        private val KEY_DARK_MODE = stringPreferencesKey("dark_mode")
     }
 
     val apiKey: Flow<String?> = context.nimDataStore.data.map { prefs ->
@@ -66,5 +67,24 @@ class NimStore(private val context: Context) {
 
     suspend fun saveAgentModel(id: String) {
         context.nimDataStore.edit { prefs -> prefs[KEY_AGENT_MODEL] = id }
+    }
+
+    /** null이면 시스템 설정을 따릅니다. */
+    val darkMode: Flow<Boolean?> = context.nimDataStore.data.map { prefs ->
+        when (prefs[KEY_DARK_MODE]) {
+            "dark" -> true
+            "light" -> false
+            else -> null
+        }
+    }
+
+    suspend fun saveDarkMode(enabled: Boolean?) {
+        context.nimDataStore.edit { prefs ->
+            when (enabled) {
+                true -> prefs[KEY_DARK_MODE] = "dark"
+                false -> prefs[KEY_DARK_MODE] = "light"
+                null -> prefs.remove(KEY_DARK_MODE)
+            }
+        }
     }
 }

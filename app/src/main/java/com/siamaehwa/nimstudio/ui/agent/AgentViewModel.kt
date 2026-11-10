@@ -48,13 +48,8 @@ data class AgentUiState(
     val messages: List<AgentMsg> = emptyList(),
     val running: Boolean = false,
     val step: Int = 0,
-    val maxSteps: Int = MAX_STEPS,
     val banner: String? = null,
-) {
-    companion object {
-        const val MAX_STEPS = 12
-    }
-}
+)
 
 class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -250,9 +245,10 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 ?.take(40)
                 ?.joinToString(", ") { if (it.isDir) it.name + "/" else it.name }
                 .orEmpty()
-            var completed = false
+            var step = 0
             try {
-                for (step in 1..AgentUiState.MAX_STEPS) {
+                while (true) {
+                    step++
                     _state.update { it.copy(step = step) }
                     val messages = listOf(
                         ChatMessage(role = "system", content = systemPrompt(ws, rootListing)),
@@ -305,10 +301,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         ),
                     )
 
-                    if (calls.isEmpty()) {
-                        completed = true
-                        break
-                    }
+                    if (calls.isEmpty()) break
 
                     for (call in calls) {
                         val toolId = nextId++
@@ -339,12 +332,6 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                             ),
                         )
                     }
-                }
-                if (!completed) {
-                    addNotice(
-                        "최대 단계(${AgentUiState.MAX_STEPS})에 도달했습니다. " +
-                            "계속하려면 다시 요청하세요.",
-                    )
                 }
             } catch (c: CancellationException) {
                 addNotice("작업을 중지했습니다.")
