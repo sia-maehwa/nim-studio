@@ -60,6 +60,16 @@ class NimRepository(
         return client.generateImages(key, base, params)
     }
 
+    fun streamAgent(
+        model: String,
+        messages: List<ChatMessage>,
+        tools: List<ToolSpec>,
+    ): Flow<AgentStreamEvent> = flow {
+        val key = store.apiKey.first() ?: throw MissingApiKeyException()
+        val base = store.baseUrl.first()
+        emitAll(client.streamAgent(key, base, model, messages, tools))
+    }
+
     fun stream(
         model: String,
         turns: List<ChatTurn>,

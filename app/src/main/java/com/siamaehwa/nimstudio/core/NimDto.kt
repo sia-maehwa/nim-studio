@@ -2,6 +2,7 @@ package com.siamaehwa.nimstudio.core
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class NimModel(
@@ -19,7 +20,35 @@ data class ModelsResponse(
 @Serializable
 data class ChatMessage(
     val role: String,
-    val content: String,
+    val content: String? = null,
+    @SerialName("tool_calls") val toolCalls: List<ToolCall>? = null,
+    @SerialName("tool_call_id") val toolCallId: String? = null,
+)
+
+@Serializable
+data class ToolCall(
+    val id: String = "",
+    val type: String = "function",
+    val function: ToolCallFunction = ToolCallFunction(),
+)
+
+@Serializable
+data class ToolCallFunction(
+    val name: String = "",
+    val arguments: String = "{}",
+)
+
+@Serializable
+data class ToolSpec(
+    val type: String = "function",
+    val function: ToolFunctionSpec,
+)
+
+@Serializable
+data class ToolFunctionSpec(
+    val name: String,
+    val description: String,
+    val parameters: JsonObject,
 )
 
 @Serializable
@@ -30,6 +59,8 @@ data class ChatRequest(
     @SerialName("top_p") val topP: Double = 0.95,
     @SerialName("max_tokens") val maxTokens: Int? = 1024,
     val stream: Boolean = true,
+    val tools: List<ToolSpec>? = null,
+    @SerialName("tool_choice") val toolChoice: String? = null,
 )
 
 @Serializable
@@ -47,6 +78,21 @@ data class ChatChunkChoice(
 data class ChatDelta(
     val content: String? = null,
     @SerialName("reasoning_content") val reasoningContent: String? = null,
+    @SerialName("tool_calls") val toolCalls: List<ToolCallDelta>? = null,
+)
+
+@Serializable
+data class ToolCallDelta(
+    val index: Int = 0,
+    val id: String? = null,
+    val type: String? = null,
+    val function: FunctionDelta? = null,
+)
+
+@Serializable
+data class FunctionDelta(
+    val name: String? = null,
+    val arguments: String? = null,
 )
 
 @Serializable

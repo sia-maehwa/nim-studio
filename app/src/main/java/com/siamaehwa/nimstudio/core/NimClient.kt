@@ -47,6 +47,20 @@ data class GeneratedImage(
     val bytes: ByteArray,
 )
 
+data class AgentToolCall(
+    val id: String,
+    val name: String,
+    val arguments: String,
+)
+
+sealed interface AgentStreamEvent {
+    data class Content(val text: String) : AgentStreamEvent
+    data class Done(
+        val toolCalls: List<AgentToolCall>,
+        val finishReason: String?,
+    ) : AgentStreamEvent
+}
+
 class NimClient {
 
     private val json = Json {
@@ -245,6 +259,89 @@ class NimClient {
             if (!response.isSuccessful) null else response.body?.bytes()
         }
     }.getOrNull()
+
+    fun streamAgent(
+        apiKey: String,
+        baseUrl: String,
+        model: String,
+        messages: List<ChatMessage>,
+        tools: List<ToolSpec>,
+        temperature: Double = 0.2,
+        maxTokens: Int = 2048,
+    ): Flow<AgentStreamEvent> = flow {
+        val payload = ChatRequest(
+            model = model,
+            messages = messages,
+            temperature = temperature,
+            topP = 0.95,
+            maxTokens = maxTokens,
+            stream = true,
+            tools = tools,
+            toolChoice = "auto",
+        )
+        val request = Request.Builder()
+            .url(normalizeBase(baseUrl) + "/chat/completions")
+            .header("Authorization", "Bearer $apiKey")
+            .header("Accept", "text/event-stream")
+            .post(json.encodeToString(ChatRequest.serializer(), payload).toRequestBody(jsonMedia))
+            .build()
+
+        val call = http.newCall(request)
+        coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+
+        val accumulated = LinkedHashMap<Int, MutableAgentCall>()
+        var finishReason: String? = null
+
+        call.execute().use { response ->
+            if (!response.isSuccessful) {
+                val bodyText = response.body?.string().orEmpty()
+                throw apiException(response.code, bodyText)
+            }
+            val source = response.body?.source() ?: throw IOException("응답 본문이 비어 있습니다")
+            while (true) {
+                coroutineContext.ensureActive()
+                val line = source.readUtf8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val payloadLine = line.removePrefix("data:").trim()
+                if (payloadLine.isEmpty()) continue
+                if (payloadLine == "[DONE]") break
+                val chunk = runCatching {
+                    json.decodeFromString(ChatChunk.serializer(), payloadLine)
+                }.getOrNull() ?: continue
+                val choice = chunk.choices.firstOrNull() ?: continue
+                val delta = choice.delta
+                if (delta != null) {
+                    delta.content?.takeIf { it.isNotEmpty() }?.let {
+                        emit(AgentStreamEvent.Content(it))
+                    }
+                    delta.toolCalls?.forEach { tc ->
+                        val acc = accumulated.getOrPut(tc.index) { MutableAgentCall() }
+                        tc.id?.takeIf { it.isNotBlank() }?.let { acc.id = it }
+                        tc.function?.name?.takeIf { it.isNotBlank() }?.let { acc.name = it }
+                        tc.function?.arguments?.let { acc.arguments.append(it) }
+                    }
+                }
+                choice.finishReason?.let { finishReason = it }
+            }
+        }
+
+        val calls = accumulated.values
+            .filter { it.name.isNotBlank() }
+            .mapIndexed { index, acc ->
+                AgentToolCall(
+                    id = acc.id.ifBlank { "call_$index" },
+                    name = acc.name,
+                    arguments = acc.arguments.toString().ifBlank { "{}" },
+                )
+            }
+        emit(AgentStreamEvent.Done(calls, finishReason))
+    }.flowOn(Dispatchers.IO)
+
+    private class MutableAgentCall {
+        var id: String = ""
+        var name: String = ""
+        val arguments = StringBuilder()
+    }
 
     private fun normalizeBase(baseUrl: String): String = baseUrl.trim().trimEnd('/')
 

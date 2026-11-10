@@ -16,6 +16,8 @@ class NimStore(private val context: Context) {
         private val KEY_API_KEY_ENC = stringPreferencesKey("api_key_enc")
         private val KEY_BASE_URL = stringPreferencesKey("base_url")
         private val KEY_LAST_MODEL = stringPreferencesKey("last_model")
+        private val KEY_AGENT_TREE = stringPreferencesKey("agent_tree_uri")
+        private val KEY_AGENT_MODEL = stringPreferencesKey("agent_model")
     }
 
     val apiKey: Flow<String?> = context.nimDataStore.data.map { prefs ->
@@ -46,5 +48,23 @@ class NimStore(private val context: Context) {
 
     suspend fun saveLastModel(id: String) {
         context.nimDataStore.edit { prefs -> prefs[KEY_LAST_MODEL] = id }
+    }
+
+    val agentTreeUri: Flow<String?> = context.nimDataStore.data.map { prefs ->
+        prefs[KEY_AGENT_TREE]
+    }
+
+    val agentModel: Flow<String?> = context.nimDataStore.data.map { prefs ->
+        prefs[KEY_AGENT_MODEL]
+    }
+
+    suspend fun saveAgentTreeUri(uri: String?) {
+        context.nimDataStore.edit { prefs ->
+            if (uri.isNullOrBlank()) prefs.remove(KEY_AGENT_TREE) else prefs[KEY_AGENT_TREE] = uri
+        }
+    }
+
+    suspend fun saveAgentModel(id: String) {
+        context.nimDataStore.edit { prefs -> prefs[KEY_AGENT_MODEL] = id }
     }
 }

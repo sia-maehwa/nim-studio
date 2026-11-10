@@ -1,6 +1,7 @@
 package com.siamaehwa.nimstudio
 
 import android.app.Application
+import android.content.Context
 import com.siamaehwa.nimstudio.core.LibraryRepository
 import com.siamaehwa.nimstudio.core.NimClient
 import com.siamaehwa.nimstudio.core.NimRepository
@@ -19,6 +20,7 @@ class NimStudioApp : Application() {
 }
 
 class AppContainer(application: Application) {
+    val appContext: Context = application.applicationContext
     val store = NimStore(application)
     val client = NimClient()
     val repository = NimRepository(store, client)

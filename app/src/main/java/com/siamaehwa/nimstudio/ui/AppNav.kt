@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -22,6 +23,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.siamaehwa.nimstudio.ui.agent.AgentScreen
 import com.siamaehwa.nimstudio.ui.chat.ChatScreen
 import com.siamaehwa.nimstudio.ui.image.ImageScreen
 import com.siamaehwa.nimstudio.ui.library.LibraryScreen
@@ -36,6 +38,7 @@ private data class Destination(
 
 private val destinations = listOf(
     Destination("chat", "채팅", Icons.Filled.Chat),
+    Destination("agent", "에이전트", Icons.Filled.SmartToy),
     Destination("image", "이미지", Icons.Filled.Image),
     Destination("models", "모델", Icons.Filled.Memory),
     Destination("library", "라이브러리", Icons.Filled.Folder),
@@ -81,6 +84,9 @@ fun AppRoot() {
         ) {
             composable("chat") {
                 ChatScreen(onOpenSettings = { navController.switchTab("settings") })
+            }
+            composable("agent") {
+                AgentScreen(onOpenSettings = { navController.switchTab("settings") })
             }
             composable("image") {
                 ImageScreen(onOpenSettings = { navController.switchTab("settings") })
