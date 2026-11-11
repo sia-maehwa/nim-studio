@@ -114,6 +114,7 @@ data class ChatChunkChoice(
 data class ChatDelta(
     val content: String? = null,
     @SerialName("reasoning_content") val reasoningContent: String? = null,
+    val reasoning: String? = null,
     @SerialName("tool_calls") val toolCalls: List<ToolCallDelta>? = null,
 )
 

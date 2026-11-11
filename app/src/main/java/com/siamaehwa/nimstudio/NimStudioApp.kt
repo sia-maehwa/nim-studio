@@ -1,7 +1,9 @@
 package com.siamaehwa.nimstudio
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
+import android.os.Bundle
 import com.siamaehwa.nimstudio.core.LibraryRepository
 import com.siamaehwa.nimstudio.core.NimClient
 import com.siamaehwa.nimstudio.core.NimRepository
@@ -15,9 +17,37 @@ class NimStudioApp : Application() {
     lateinit var container: AppContainer
         private set
 
+    var isInForeground: Boolean = false
+        private set
+
+    private var startedActivities = 0
+
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        registerActivityLifecycleCallbacks(
+            object : ActivityLifecycleCallbacks {
+                override fun onActivityStarted(activity: Activity) {
+                    startedActivities++
+                    isInForeground = true
+                }
+
+                override fun onActivityStopped(activity: Activity) {
+                    startedActivities = (startedActivities - 1).coerceAtLeast(0)
+                    if (startedActivities == 0) isInForeground = false
+                }
+
+                override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+
+                override fun onActivityResumed(activity: Activity) = Unit
+
+                override fun onActivityPaused(activity: Activity) = Unit
+
+                override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
+
+                override fun onActivityDestroyed(activity: Activity) = Unit
+            },
+        )
     }
 }
 

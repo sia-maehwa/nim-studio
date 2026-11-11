@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.siamaehwa.nimstudio.AppContainer
 import com.siamaehwa.nimstudio.KeepAliveService
+import com.siamaehwa.nimstudio.core.AgentPermission
 import com.siamaehwa.nimstudio.core.AgentStreamEvent
 import com.siamaehwa.nimstudio.core.AgentToolCall
 import com.siamaehwa.nimstudio.core.AttachmentContent
@@ -13,6 +14,7 @@ import com.siamaehwa.nimstudio.core.ChatMessage
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.Notifier
 import com.siamaehwa.nimstudio.core.ReasoningEffort
 import com.siamaehwa.nimstudio.core.TokenEstimator
 import com.siamaehwa.nimstudio.core.ToolCall
@@ -61,10 +63,16 @@ data class AgentQuestion(
     val options: List<String>,
 )
 
+data class AgentPermissionRequest(
+    val toolName: String,
+    val summary: String,
+)
+
 data class AgentMsg(
     val id: Long,
     val kind: String,
     val text: String = "",
+    val reasoning: String = "",
     val streaming: Boolean = false,
     val toolName: String? = null,
     val toolStatus: String? = null,
@@ -89,6 +97,7 @@ data class AgentUiState(
     val modelsLoading: Boolean = false,
     val selectedModel: String? = null,
     val reasoning: ReasoningEffort = ReasoningEffort.Default,
+    val permission: AgentPermission = AgentPermission.AutoReview,
     val messages: List<AgentMsg> = emptyList(),
     val attachments: List<AttachmentContent> = emptyList(),
     val attachmentsLoading: Boolean = false,
@@ -100,6 +109,7 @@ data class AgentUiState(
     val tokensPerSecond: Int = 0,
     val todos: List<AgentTodo> = emptyList(),
     val pendingQuestion: AgentQuestion? = null,
+    val pendingPermission: AgentPermissionRequest? = null,
     val pluginToolCount: Int = 0,
     val history: List<AgentSessionSummary> = emptyList(),
     val historyView: AgentHistoryView? = null,
@@ -125,6 +135,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     private var job: Job? = null
     private var currentPlugins: List<PluginManifest> = emptyList()
     private var questionDeferred: CompletableDeferred<String>? = null
+    private var permissionDeferred: CompletableDeferred<Boolean>? = null
     private var sessionId: Long? = null
     private val historyJson = Json {
         ignoreUnknownKeys = true
@@ -152,6 +163,11 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.store.agentReasoning.collect { effort ->
                 _state.update { it.copy(reasoning = effort) }
+            }
+        }
+        viewModelScope.launch {
+            container.store.agentPermission.collect { permission ->
+                _state.update { it.copy(permission = permission) }
             }
         }
         viewModelScope.launch {
@@ -231,6 +247,19 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     fun setReasoning(effort: ReasoningEffort) {
         _state.update { it.copy(reasoning = effort) }
         viewModelScope.launch { container.store.saveAgentReasoning(effort) }
+    }
+
+    fun setPermission(permission: AgentPermission) {
+        _state.update { it.copy(permission = permission) }
+        viewModelScope.launch { container.store.saveAgentPermission(permission) }
+    }
+
+    fun answerPermission(allow: Boolean) {
+        val deferred = permissionDeferred ?: return
+        permissionDeferred = null
+        _state.update { it.copy(pendingPermission = null) }
+        addNotice(if (allow) "실행을 허용했습니다" else "실행을 거부했습니다")
+        deferred.complete(allow)
     }
 
     fun addAttachments(uris: List<Uri>) {
@@ -335,6 +364,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 attachmentsLoading = false,
                 todos = emptyList(),
                 pendingQuestion = null,
+                pendingPermission = null,
                 tokens = 0,
                 tokensExact = false,
                 tokensPerSecond = 0,
@@ -462,47 +492,63 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         AgentMsg(id = assistantId, kind = "assistant", streaming = true),
                     )
                     val builder = StringBuilder()
+                    val reasoningBuilder = StringBuilder()
+                    var completionEstimate = 0
                     var calls: List<AgentToolCall> = emptyList()
                     var finishReason: String? = null
                     var lastUi = 0L
                     var firstTokenAt = 0L
+
+                    fun elapsedMs(now: Long): Long =
+                        if (firstTokenAt > 0L) (now - firstTokenAt).coerceAtLeast(1L) else 0L
+
+                    fun refreshLive(now: Long, force: Boolean) {
+                        if (!force && now - lastUi <= 40) return
+                        lastUi = now
+                        updateMessage(assistantId) {
+                            it.copy(
+                                text = builder.toString(),
+                                reasoning = reasoningBuilder.toString(),
+                            )
+                        }
+                        val elapsed = elapsedMs(now)
+                        val speed = if (elapsed >= 250L) {
+                            (completionEstimate * 1000.0 / elapsed).toInt()
+                        } else {
+                            0
+                        }
+                        _state.update {
+                            it.copy(
+                                tokens = promptEstimate + completionEstimate,
+                                tokensExact = false,
+                                tokensPerSecond = speed,
+                            )
+                        }
+                    }
 
                     container.repository.streamAgent(
                         model,
                         messages,
                         specs,
                         reasoningEffort = reasoning,
+                        maxTokens = MAX_AGENT_TOKENS,
                     )
                         .collect { event ->
                             when (event) {
                                 is AgentStreamEvent.Content -> {
                                     builder.append(event.text)
+                                    completionEstimate += TokenEstimator.estimate(event.text)
                                     val now = System.currentTimeMillis()
                                     if (firstTokenAt == 0L) firstTokenAt = now
-                                    if (now - lastUi > 40) {
-                                        lastUi = now
-                                        updateMessage(assistantId) {
-                                            it.copy(text = builder.toString())
-                                        }
-                                        val completion = TokenEstimator.estimate(builder.toString())
-                                        val elapsed = if (firstTokenAt > 0L) {
-                                            (now - firstTokenAt).coerceAtLeast(1L)
-                                        } else {
-                                            0L
-                                        }
-                                        val speed = if (elapsed >= 250L) {
-                                            (completion * 1000.0 / elapsed).toInt()
-                                        } else {
-                                            0
-                                        }
-                                        _state.update {
-                                            it.copy(
-                                                tokens = promptEstimate + completion,
-                                                tokensExact = false,
-                                                tokensPerSecond = speed,
-                                            )
-                                        }
-                                    }
+                                    refreshLive(now, force = false)
+                                }
+
+                                is AgentStreamEvent.Reasoning -> {
+                                    reasoningBuilder.append(event.text)
+                                    completionEstimate += TokenEstimator.estimate(event.text)
+                                    val now = System.currentTimeMillis()
+                                    if (firstTokenAt == 0L) firstTokenAt = now
+                                    refreshLive(now, force = false)
                                 }
 
                                 is AgentStreamEvent.Done -> {
@@ -510,11 +556,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                     finishReason = event.finishReason
                                     event.usage?.let { usage ->
                                         val now = System.currentTimeMillis()
-                                        val elapsed = if (firstTokenAt > 0L) {
-                                            (now - firstTokenAt).coerceAtLeast(1L)
-                                        } else {
-                                            0L
-                                        }
+                                        val elapsed = elapsedMs(now)
                                         val speed = if (elapsed >= 250L &&
                                             usage.completionTokens > 0
                                         ) {
@@ -535,8 +577,14 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         }
 
                     val assistantText = builder.toString()
+                    val reasoningText = reasoningBuilder.toString()
+                    refreshLive(System.currentTimeMillis(), force = true)
                     updateMessage(assistantId) {
-                        it.copy(text = assistantText, streaming = false)
+                        it.copy(
+                            text = assistantText,
+                            reasoning = reasoningText,
+                            streaming = false,
+                        )
                     }
                     if (assistantText.isNotBlank()) {
                         persist("assistant", assistantText)
@@ -570,6 +618,10 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                             persist("notice", notice)
                         }
                         completed = true
+                        Notifier.completed(
+                            container.appContext,
+                            "작업 완료: ${displayText.take(60)}",
+                        )
                         break
                     }
 
@@ -586,21 +638,42 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 streaming = true,
                             ),
                         )
-                        val outcome = when (call.name) {
-                            "ask_user" -> handleAskUser(call)
-                            "todo_write" -> handleTodoWrite(call)
-                            else -> {
-                                val pluginTool = if (call.name in coreToolNames) {
-                                    null
+                        val pluginTool = if (call.name in coreToolNames) {
+                            null
+                        } else {
+                            container.plugins.findTool(currentPlugins, call.name)
+                        }
+                        val gated = call.name in GATED_TOOLS || pluginTool != null
+                        val permissionMode = _state.value.permission
+                        val outcome = when {
+                            call.name == "ask_user" -> handleAskUser(call)
+                            call.name == "todo_write" -> handleTodoWrite(call)
+                            gated && permissionMode == AgentPermission.ReadOnly -> ToolOutcome(
+                                summary = "${call.name} · 차단됨",
+                                detail = "읽기 전용 모드에서는 실행할 수 없습니다",
+                                result = "ERROR: 읽기 전용 모드입니다. 파일 수정·플러그인 실행은 허용되지 않습니다.",
+                                isError = true,
+                            )
+
+                            gated && permissionMode == AgentPermission.AutoReview -> {
+                                if (requestPermission(call)) {
+                                    if (pluginTool != null) {
+                                        executePlugin(pluginTool, call)
+                                    } else {
+                                        runner.execute(call)
+                                    }
                                 } else {
-                                    container.plugins.findTool(currentPlugins, call.name)
-                                }
-                                if (pluginTool != null) {
-                                    executePlugin(pluginTool, call)
-                                } else {
-                                    runner.execute(call)
+                                    ToolOutcome(
+                                        summary = "${call.name} · 거부됨",
+                                        detail = "사용자가 실행을 거부했습니다",
+                                        result = "ERROR: 사용자가 실행을 거부했습니다. 다른 방법을 제안하세요.",
+                                        isError = true,
+                                    )
                                 }
                             }
+
+                            pluginTool != null -> executePlugin(pluginTool, call)
+                            else -> runner.execute(call)
                         }
                         updateMessage(toolId) {
                             it.copy(
@@ -628,6 +701,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         "계속하려면 다시 요청하세요."
                     addNotice(notice)
                     persist("notice", notice)
+                    Notifier.completed(container.appContext, notice)
                 }
             } catch (c: CancellationException) {
                 respondMissing(activeCalls, responded)
@@ -647,10 +721,18 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     ),
                 )
                 persist("error", message)
+                Notifier.completed(container.appContext, "작업 중단: $message")
             } finally {
                 KeepAliveService.end(container.appContext)
                 questionDeferred = null
-                _state.update { it.copy(running = false, pendingQuestion = null) }
+                permissionDeferred = null
+                _state.update {
+                    it.copy(
+                        running = false,
+                        pendingQuestion = null,
+                        pendingPermission = null,
+                    )
+                }
             }
         }
     }
@@ -667,6 +749,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         val deferred = CompletableDeferred<String>()
         questionDeferred = deferred
         _state.update { it.copy(pendingQuestion = AgentQuestion(question, options)) }
+        Notifier.question(container.appContext, question)
         try {
             val answer = deferred.await()
             return ToolOutcome(
@@ -677,6 +760,25 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         } finally {
             questionDeferred = null
             _state.update { it.copy(pendingQuestion = null) }
+        }
+    }
+
+    private suspend fun requestPermission(call: AgentToolCall): Boolean {
+        val deferred = CompletableDeferred<Boolean>()
+        permissionDeferred = deferred
+        val summary = call.arguments.take(300).ifBlank { "{}" }
+        _state.update {
+            it.copy(pendingPermission = AgentPermissionRequest(call.name, summary))
+        }
+        Notifier.permission(
+            container.appContext,
+            "${call.name} 실행 확인\n${summary.take(120)}",
+        )
+        return try {
+            deferred.await()
+        } finally {
+            permissionDeferred = null
+            _state.update { it.copy(pendingPermission = null) }
         }
     }
 
@@ -867,6 +969,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     attachmentsLoading = false,
                     todos = emptyList(),
                     pendingQuestion = null,
+                    pendingPermission = null,
                     tokens = 0,
                     tokensExact = false,
                     tokensPerSecond = 0,
@@ -964,5 +1067,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
     private companion object {
         const val MAX_API_JSON_CHARS = 400_000
+        const val MAX_AGENT_TOKENS = 16384
+        val GATED_TOOLS = setOf("write_file", "edit_file")
     }
 }

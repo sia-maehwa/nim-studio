@@ -668,7 +668,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     private companion object {
-        const val MAX_RESPONSE_TOKENS = 4096
+        const val MAX_RESPONSE_TOKENS = 16384
         const val CONTINUE_PROMPT =
             "이어서 계속 작성해 주세요. 앞부분을 반복하지 말고 중단된 지점부터 " +
                 "자연스럽게 바로 이어서 작성하세요."

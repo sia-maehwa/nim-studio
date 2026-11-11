@@ -23,8 +23,8 @@ android {
         applicationId = "com.siamaehwa.nimstudio"
         minSdk = 29
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.4.7"
+        versionCode = 12
+        versionName = "0.5.0"
     }
 
     signingConfigs {

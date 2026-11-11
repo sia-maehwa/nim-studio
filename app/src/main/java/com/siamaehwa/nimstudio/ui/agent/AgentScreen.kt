@@ -53,7 +53,9 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -91,6 +93,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.siamaehwa.nimstudio.NimStudioApp
+import com.siamaehwa.nimstudio.core.AgentPermission
 import com.siamaehwa.nimstudio.core.AttachmentContent
 import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.ReasoningEffort
@@ -147,6 +150,10 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
             IconButton(onClick = { folderPicker.launch(null) }) {
                 Icon(Icons.Filled.FolderOpen, contentDescription = "작업 폴더 선택")
             }
+            AgentPermissionPicker(
+                permission = state.permission,
+                onSelect = vm::setPermission,
+            )
             AgentModelPicker(
                 models = state.models,
                 selected = state.selectedModel,
@@ -202,9 +209,17 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
 
             else -> {
                 val messages = state.messages
-                LaunchedEffect(messages.size) {
+                val lastTextLength = messages.lastOrNull()?.text?.length ?: 0
+                val lastReasoningLength = messages.lastOrNull()?.reasoning?.length ?: 0
+                LaunchedEffect(
+                    messages.size,
+                    lastTextLength,
+                    lastReasoningLength,
+                    state.pendingQuestion,
+                    state.pendingPermission,
+                ) {
                     if (messages.isNotEmpty()) {
-                        listState.animateScrollToItem(messages.lastIndex)
+                        listState.scrollToItem(messages.lastIndex)
                     }
                 }
 
@@ -250,8 +265,15 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                     TodoPanel(todos = state.todos)
                 }
 
+                val permissionRequest = state.pendingPermission
                 val question = state.pendingQuestion
-                if (question != null) {
+                if (permissionRequest != null) {
+                    PermissionCard(
+                        request = permissionRequest,
+                        onAllow = { vm.answerPermission(true) },
+                        onDeny = { vm.answerPermission(false) },
+                    )
+                } else if (question != null) {
                     QuestionCard(
                         question = question,
                         onAnswer = vm::answerQuestion,
@@ -493,6 +515,30 @@ private fun AgentMessageItem(msg: AgentMsg, onUndo: () -> Unit) {
         }
 
         "assistant" -> Column(modifier = Modifier.fillMaxWidth()) {
+            if (msg.reasoning.isNotBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            if (msg.streaming) "생각 과정 (진행 중)" else "생각 과정",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            msg.reasoning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 10,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
             if (msg.text.isNotBlank()) {
                 if (msg.streaming) {
                     Text(msg.text, style = MaterialTheme.typography.bodyLarge)
@@ -686,6 +732,7 @@ private fun QuestionCard(
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .imePadding()
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
         Column(
@@ -735,6 +782,59 @@ private fun QuestionCard(
                 ) {
                     Text("답변")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PermissionCard(
+    request: AgentPermissionRequest,
+    onAllow: () -> Unit,
+    onDeny: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .imePadding()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.VerifiedUser,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "실행 권한 확인",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+            }
+            Text(
+                "${request.toolName} 도구를 실행할까요?",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
+            Text(
+                request.summary,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                maxLines = 6,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onDeny) { Text("거부") }
+                Spacer(Modifier.weight(1f))
+                Button(onClick = onAllow) { Text("허용") }
             }
         }
     }
@@ -822,6 +922,56 @@ private fun todoIcon(status: String): ImageVector = when (status) {
 private fun todoTint(status: String) = when (status) {
     "completed", "in_progress" -> MaterialTheme.colorScheme.primary
     else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+@Composable
+private fun AgentPermissionPicker(
+    permission: AgentPermission,
+    onSelect: (AgentPermission) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(
+                Icons.Filled.Security,
+                contentDescription = "권한 범위: ${permission.label}",
+                tint = if (permission == AgentPermission.Full) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.widthIn(max = 320.dp),
+        ) {
+            AgentPermission.entries.forEach { item ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(item.label)
+                            Text(
+                                item.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    trailingIcon = {
+                        if (item == permission) {
+                            Icon(Icons.Filled.Check, contentDescription = null)
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onSelect(item)
+                    },
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -930,7 +1080,7 @@ private fun AgentInputBar(
                 value = draft,
                 onValueChange = onDraftChange,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("예: 채팅 화면에 다크 모드 토글 추가해줘") },
+                placeholder = { Text("메시지 입력…") },
                 maxLines = 5,
                 shape = RoundedCornerShape(18.dp),
                 trailingIcon = {

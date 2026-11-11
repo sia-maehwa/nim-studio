@@ -21,6 +21,7 @@ class NimStore(private val context: Context) {
         private val KEY_DARK_MODE = stringPreferencesKey("dark_mode")
         private val KEY_CHAT_REASONING = stringPreferencesKey("chat_reasoning")
         private val KEY_AGENT_REASONING = stringPreferencesKey("agent_reasoning")
+        private val KEY_AGENT_PERMISSION = stringPreferencesKey("agent_permission")
     }
 
     val apiKey: Flow<String?> = context.nimDataStore.data.map { prefs ->
@@ -97,6 +98,14 @@ class NimStore(private val context: Context) {
                 prefs[KEY_AGENT_REASONING] = effort.id
             }
         }
+    }
+
+    val agentPermission: Flow<AgentPermission> = context.nimDataStore.data.map { prefs ->
+        AgentPermission.fromId(prefs[KEY_AGENT_PERMISSION])
+    }
+
+    suspend fun saveAgentPermission(permission: AgentPermission) {
+        context.nimDataStore.edit { prefs -> prefs[KEY_AGENT_PERMISSION] = permission.id }
     }
 
     /** null이면 시스템 설정을 따릅니다. */

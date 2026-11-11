@@ -86,10 +86,21 @@ class NimRepository(
         messages: List<ChatMessage>,
         tools: List<ToolSpec>,
         reasoningEffort: String? = null,
+        maxTokens: Int = 16384,
     ): Flow<AgentStreamEvent> = flow {
         val key = store.apiKey.first() ?: throw MissingApiKeyException()
         val base = store.baseUrl.first()
-        emitAll(client.streamAgent(key, base, model, messages, tools, reasoningEffort = reasoningEffort))
+        emitAll(
+            client.streamAgent(
+                key,
+                base,
+                model,
+                messages,
+                tools,
+                maxTokens = maxTokens,
+                reasoningEffort = reasoningEffort,
+            ),
+        )
     }
 
     fun stream(

@@ -59,6 +59,7 @@ data class AgentToolCall(
 
 sealed interface AgentStreamEvent {
     data class Content(val text: String) : AgentStreamEvent
+    data class Reasoning(val text: String) : AgentStreamEvent
     data class Done(
         val toolCalls: List<AgentToolCall>,
         val finishReason: String?,
@@ -136,6 +137,38 @@ class NimClient {
         maxTokens: Int = 4096,
         reasoningEffort: String? = null,
     ): Flow<NimStreamEvent> = flow {
+        var emitted = false
+        var lastError: Exception? = null
+        for (tokens in tokenLadder(maxTokens)) {
+            try {
+                streamChatOnce(
+                    apiKey, baseUrl, model, turns, temperature, tokens, reasoningEffort,
+                ) { event ->
+                    emitted = true
+                    emit(event)
+                }
+                lastError = null
+                break
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: NimApiException) {
+                if (e.status !in RETRYABLE_STATUSES || emitted) throw e
+                lastError = e
+            }
+        }
+        lastError?.let { throw it }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun streamChatOnce(
+        apiKey: String,
+        baseUrl: String,
+        model: String,
+        turns: List<ChatTurn>,
+        temperature: Double,
+        maxTokens: Int,
+        reasoningEffort: String?,
+        onEvent: suspend (NimStreamEvent) -> Unit,
+    ) {
         val payload = ChatRequest(
             model = model,
             messages = turns.map {
@@ -187,15 +220,15 @@ class NimClient {
                 val delta = choice.delta
                 if (delta != null) {
                     val content = delta.content
-                    if (!content.isNullOrEmpty()) emit(NimStreamEvent.Content(content))
-                    val reasoning = delta.reasoningContent
-                    if (!reasoning.isNullOrEmpty()) emit(NimStreamEvent.Reasoning(reasoning))
+                    if (!content.isNullOrEmpty()) onEvent(NimStreamEvent.Content(content))
+                    val reasoning = delta.reasoningContent ?: delta.reasoning
+                    if (!reasoning.isNullOrEmpty()) onEvent(NimStreamEvent.Reasoning(reasoning))
                 }
                 choice.finishReason?.let { finishReason = normalizeFinishReason(it) }
             }
-            emit(NimStreamEvent.Finished(finishReason ?: if (sawDone) "stop" else null, usage))
+            onEvent(NimStreamEvent.Finished(finishReason ?: if (sawDone) "stop" else null, usage))
         }
-    }.flowOn(Dispatchers.IO)
+    }
 
     suspend fun generateImages(
         apiKey: String,
@@ -239,20 +272,125 @@ class NimClient {
         spec: ImageModelSpec?,
     ): List<ImageAttempt> {
         val base = normalizeBase(baseUrl)
+        val ladder = genaiPayloadLadder(params, spec)
         if (base.contains("api.nvidia.com")) {
-            return listOf(
-                ImageAttempt(
-                    url = "https://ai.api.nvidia.com/v1/genai/${params.model}",
-                    payload = genaiPayload(params, spec),
-                ),
-            )
+            val url = "https://ai.api.nvidia.com/v1/genai/${params.model}"
+            return ladder.map { ImageAttempt(url, it) }
         }
         return listOf(
             ImageAttempt("$base/images/generations", openAiImagesPayload(params)),
-            ImageAttempt("$base/genai/${params.model}", genaiPayload(params, spec)),
-            ImageAttempt("$base/infer", genaiPayload(params, spec)),
-        )
+        ) + ladder.flatMap { payload ->
+            listOf(
+                ImageAttempt("$base/genai/${params.model}", payload),
+                ImageAttempt("$base/infer", payload),
+            )
+        }
     }
+
+    private fun genaiPayloadLadder(
+        params: ImageGenParams,
+        spec: ImageModelSpec?,
+    ): List<String> {
+        val family = spec?.family ?: ImageFamily.Flux
+        return when (family) {
+            ImageFamily.Sdxl -> listOf(
+                genaiSdxl(params, spec, minimal = false),
+                genaiSdxl(params, spec, minimal = true),
+            )
+
+            ImageFamily.Sd3 -> listOf(
+                genaiSd3(params, spec, includeNegative = true, includeCfg = true),
+                genaiSd3(params, spec, includeNegative = false, includeCfg = true),
+                genaiSd3(params, spec, includeNegative = false, includeCfg = false),
+            )
+
+            ImageFamily.Klein -> listOf(
+                genaiKlein(params, spec),
+                genaiMinimal(params),
+            )
+
+            ImageFamily.Flux -> listOf(
+                genaiFlux(params, spec, includeCfg = true, includeMode = true),
+                genaiFlux(params, spec, includeCfg = false, includeMode = true),
+                genaiFlux(params, spec, includeCfg = false, includeMode = false),
+            )
+        }
+    }
+
+    private fun genaiSdxl(params: ImageGenParams, spec: ImageModelSpec?, minimal: Boolean): String =
+        buildJsonObject {
+            putJsonArray("text_prompts") {
+                add(
+                    buildJsonObject {
+                        put("text", params.prompt)
+                        put("weight", 1)
+                    },
+                )
+                if (!minimal && params.negativePrompt.isNotBlank()) {
+                    add(
+                        buildJsonObject {
+                            put("text", params.negativePrompt)
+                            put("weight", -1)
+                        },
+                    )
+                }
+            }
+            if (!minimal) {
+                put("cfg_scale", spec?.cfgScale ?: 7.5)
+                put("seed", params.seed ?: 0)
+                put("steps", params.steps)
+            }
+            put("width", params.width)
+            put("height", params.height)
+        }.toString()
+
+    private fun genaiSd3(
+        params: ImageGenParams,
+        spec: ImageModelSpec?,
+        includeNegative: Boolean,
+        includeCfg: Boolean,
+    ): String = buildJsonObject {
+        put("prompt", params.prompt)
+        if (includeNegative && params.negativePrompt.isNotBlank()) {
+            put("negative_prompt", params.negativePrompt)
+        }
+        if (includeCfg) {
+            put("cfg_scale", spec?.cfgScale ?: 3.5)
+            put("seed", params.seed ?: 0)
+            put("steps", params.steps)
+        }
+        put("aspect_ratio", aspectRatio(params.width, params.height))
+    }.toString()
+
+    private fun genaiKlein(params: ImageGenParams, spec: ImageModelSpec?): String =
+        buildJsonObject {
+            put("prompt", params.prompt)
+            put("width", params.width)
+            put("height", params.height)
+            put("seed", params.seed ?: 0)
+            put("steps", spec?.fixedSteps ?: params.steps)
+        }.toString()
+
+    private fun genaiFlux(
+        params: ImageGenParams,
+        spec: ImageModelSpec?,
+        includeCfg: Boolean,
+        includeMode: Boolean,
+    ): String = buildJsonObject {
+        put("prompt", params.prompt)
+        if (includeMode) put("mode", "base")
+        put("width", params.width)
+        put("height", params.height)
+        put("seed", params.seed ?: 0)
+        put("steps", spec?.fixedSteps ?: params.steps.coerceIn(5, 50))
+        if (includeCfg) spec?.cfgScale?.let { put("cfg_scale", it) }
+    }.toString()
+
+    private fun genaiMinimal(params: ImageGenParams): String = buildJsonObject {
+        put("prompt", params.prompt)
+        put("width", params.width)
+        put("height", params.height)
+    }.toString()
 
     private fun openAiImagesPayload(params: ImageGenParams): String = buildJsonObject {
         put("model", params.model)
@@ -425,6 +563,39 @@ class NimClient {
         maxTokens: Int = 4096,
         reasoningEffort: String? = null,
     ): Flow<AgentStreamEvent> = flow {
+        var emitted = false
+        var lastError: Exception? = null
+        for (tokens in tokenLadder(maxTokens)) {
+            try {
+                streamAgentOnce(
+                    apiKey, baseUrl, model, messages, tools, temperature, tokens, reasoningEffort,
+                ) { event ->
+                    emitted = true
+                    emit(event)
+                }
+                lastError = null
+                break
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: NimApiException) {
+                if (e.status !in RETRYABLE_STATUSES || emitted) throw e
+                lastError = e
+            }
+        }
+        lastError?.let { throw it }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun streamAgentOnce(
+        apiKey: String,
+        baseUrl: String,
+        model: String,
+        messages: List<ChatMessage>,
+        tools: List<ToolSpec>,
+        temperature: Double,
+        maxTokens: Int,
+        reasoningEffort: String?,
+        onEvent: suspend (AgentStreamEvent) -> Unit,
+    ) {
         val payload = ChatRequest(
             model = model,
             messages = messages,
@@ -478,7 +649,11 @@ class NimClient {
                 val delta = choice.delta
                 if (delta != null) {
                     delta.content?.takeIf { it.isNotEmpty() }?.let {
-                        emit(AgentStreamEvent.Content(it))
+                        onEvent(AgentStreamEvent.Content(it))
+                    }
+                    val reasoning = delta.reasoningContent ?: delta.reasoning
+                    if (!reasoning.isNullOrEmpty()) {
+                        onEvent(AgentStreamEvent.Reasoning(reasoning))
                     }
                     delta.toolCalls?.forEach { tc ->
                         val acc = accumulated.getOrPut(tc.index) { MutableAgentCall() }
@@ -500,13 +675,20 @@ class NimClient {
                     arguments = acc.arguments.toString().ifBlank { "{}" },
                 )
             }
-        emit(AgentStreamEvent.Done(calls, finishReason ?: if (sawDone) "stop" else null, usage))
-    }.flowOn(Dispatchers.IO)
+        onEvent(AgentStreamEvent.Done(calls, finishReason ?: if (sawDone) "stop" else null, usage))
+    }
+
+    private fun tokenLadder(requested: Int): List<Int> =
+        listOf(requested, 8192, 4096).filter { it <= requested }.distinct()
 
     private class MutableAgentCall {
         var id: String = ""
         var name: String = ""
         val arguments = StringBuilder()
+    }
+
+    private companion object {
+        val RETRYABLE_STATUSES = setOf(400, 422)
     }
 
     private fun normalizeFinishReason(reason: String): String = when (reason) {
