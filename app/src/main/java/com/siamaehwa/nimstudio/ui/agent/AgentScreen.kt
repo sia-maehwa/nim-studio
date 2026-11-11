@@ -96,8 +96,9 @@ import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.ReasoningEffort
 import com.siamaehwa.nimstudio.core.db.AgentSessionSummary
 import com.siamaehwa.nimstudio.ui.common.AttachmentChips
+import com.siamaehwa.nimstudio.ui.common.AttachmentPreviews
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
-import com.siamaehwa.nimstudio.ui.common.ReasoningPicker
+import com.siamaehwa.nimstudio.ui.common.ReasoningChips
 import com.siamaehwa.nimstudio.ui.common.RenderedMarkdown
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
 import java.time.Instant
@@ -150,6 +151,8 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                 models = state.models,
                 selected = state.selectedModel,
                 loading = state.modelsLoading,
+                reasoning = state.reasoning,
+                onReasoning = vm::setReasoning,
                 onPick = vm::pickModel,
                 onRefresh = vm::refreshModels,
             )
@@ -245,18 +248,6 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
 
                 if (state.todos.isNotEmpty()) {
                     TodoPanel(todos = state.todos)
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ReasoningPicker(
-                        selected = state.reasoning,
-                        onSelect = vm::setReasoning,
-                    )
                 }
 
                 val question = state.pendingQuestion
@@ -476,13 +467,27 @@ private fun AgentMessageItem(msg: AgentMsg, onUndo: () -> Unit) {
                 shape = RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp),
                 modifier = Modifier.widthIn(max = 340.dp),
             ) {
-                SelectionContainer {
-                    Text(
-                        text = msg.text,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    if (msg.attachments.isNotEmpty()) {
+                        AttachmentPreviews(
+                            attachments = msg.attachments,
+                            thumbnailSize = 130.dp,
+                        )
+                        if (msg.text.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                        }
+                    }
+                    if (msg.text.isNotBlank()) {
+                        SelectionContainer {
+                            Text(
+                                text = msg.text,
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -824,6 +829,8 @@ private fun AgentModelPicker(
     models: List<NimModel>,
     selected: String?,
     loading: Boolean,
+    reasoning: ReasoningEffort,
+    onReasoning: (ReasoningEffort) -> Unit,
     onPick: (String) -> Unit,
     onRefresh: () -> Unit,
 ) {
@@ -839,6 +846,24 @@ private fun AgentModelPicker(
             Icon(Icons.Filled.ArrowDropDown, contentDescription = "모델 변경")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text(
+                "추론 강도",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 2.dp),
+            )
+            ReasoningChips(
+                selected = reasoning,
+                onSelect = {
+                    onReasoning(it)
+                    open = false
+                },
+                modifier = Modifier
+                    .width(300.dp)
+                    .padding(horizontal = 12.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+            HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("모델 목록 새로고침") },
                 leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },

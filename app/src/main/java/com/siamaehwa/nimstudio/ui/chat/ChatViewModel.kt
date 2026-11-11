@@ -50,7 +50,7 @@ data class ChatMsg(
     val streaming: Boolean = false,
     val detail: String? = null,
     val truncated: Boolean = false,
-    val attachmentNames: List<String> = emptyList(),
+    val attachments: List<AttachmentContent> = emptyList(),
     val parts: JsonElement? = null,
 )
 
@@ -294,7 +294,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             id = nextId++,
             role = "user",
             content = prompt,
-            attachmentNames = attachments.map { it.name },
+            attachments = attachments,
             parts = parts,
         )
         val assistantId = nextId++

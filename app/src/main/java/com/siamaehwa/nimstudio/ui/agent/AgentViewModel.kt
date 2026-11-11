@@ -70,6 +70,7 @@ data class AgentMsg(
     val toolStatus: String? = null,
     val canUndo: Boolean = false,
     val undone: Boolean = false,
+    val attachments: List<AttachmentContent> = emptyList(),
 )
 
 data class AgentHistoryView(
@@ -404,7 +405,9 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         val displayText = prompt.ifBlank {
             attachments.joinToString(", ") { it.name }
         }
-        addMessage(AgentMsg(id = nextId++, kind = "user", text = displayText))
+        addMessage(
+            AgentMsg(id = nextId++, kind = "user", text = displayText, attachments = attachments),
+        )
         apiHistory.add(
             ChatMessage(
                 role = "user",

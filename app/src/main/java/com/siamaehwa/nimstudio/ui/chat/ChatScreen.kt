@@ -91,8 +91,9 @@ import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.ReasoningEffort
 import com.siamaehwa.nimstudio.core.db.ConversationEntity
 import com.siamaehwa.nimstudio.ui.common.AttachmentChips
+import com.siamaehwa.nimstudio.ui.common.AttachmentPreviews
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
-import com.siamaehwa.nimstudio.ui.common.ReasoningPicker
+import com.siamaehwa.nimstudio.ui.common.ReasoningChips
 import com.siamaehwa.nimstudio.ui.common.RenderedMarkdown
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
 import java.time.Instant
@@ -148,6 +149,8 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 models = state.chatModels,
                 selected = state.selectedModel,
                 loading = state.modelsLoading,
+                reasoning = state.reasoning,
+                onReasoning = vm::setReasoning,
                 onPick = vm::pickModel,
                 onRefresh = vm::refreshModels,
             )
@@ -176,12 +179,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 modifier = Modifier.weight(1f),
             )
         } else {
-            PresetRow(
-                selected = state.preset,
-                onSelect = vm::setPreset,
-                reasoning = state.reasoning,
-                onReasoning = vm::setReasoning,
-            )
+            PresetRow(selected = state.preset, onSelect = vm::setPreset)
 
             val reversed = remember(state.messages) { state.messages.asReversed() }
             LaunchedEffect(state.messages.size) {
@@ -409,12 +407,14 @@ private fun UserBubble(msg: ChatMsg) {
             Column(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                msg.attachmentNames.forEach { name ->
-                    Text(
-                        "첨부 · $name",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                if (msg.attachments.isNotEmpty()) {
+                    AttachmentPreviews(
+                        attachments = msg.attachments,
+                        thumbnailSize = 130.dp,
                     )
+                    if (msg.content.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                    }
                 }
                 if (msg.content.isNotBlank()) {
                     SelectionContainer {
@@ -656,12 +656,7 @@ private fun BannerBar(message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun PresetRow(
-    selected: ChatPreset,
-    onSelect: (ChatPreset) -> Unit,
-    reasoning: ReasoningEffort,
-    onReasoning: (ReasoningEffort) -> Unit,
-) {
+private fun PresetRow(selected: ChatPreset, onSelect: (ChatPreset) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -682,7 +677,6 @@ private fun PresetRow(
                 label = { Text(preset.label) },
             )
         }
-        ReasoningPicker(selected = reasoning, onSelect = onReasoning)
     }
 }
 
@@ -691,6 +685,8 @@ private fun ModelPicker(
     models: List<NimModel>,
     selected: String?,
     loading: Boolean,
+    reasoning: ReasoningEffort,
+    onReasoning: (ReasoningEffort) -> Unit,
     onPick: (String) -> Unit,
     onRefresh: () -> Unit,
 ) {
@@ -706,6 +702,24 @@ private fun ModelPicker(
             Icon(Icons.Filled.ArrowDropDown, contentDescription = "모델 변경")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text(
+                "추론 강도",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 2.dp),
+            )
+            ReasoningChips(
+                selected = reasoning,
+                onSelect = {
+                    onReasoning(it)
+                    open = false
+                },
+                modifier = Modifier
+                    .width(300.dp)
+                    .padding(horizontal = 12.dp),
+            )
+            Spacer(Modifier.height(4.dp))
+            HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("모델 목록 새로고침") },
                 leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
