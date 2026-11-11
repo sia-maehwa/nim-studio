@@ -51,7 +51,7 @@ class ModelsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
             try {
-                val models = ImageCatalog.merge(container.repository.models())
+                val models = ImageCatalog.appendCurated(container.repository.models())
                 _state.update { it.copy(loading = false, models = models, loadedOnce = true) }
             } catch (c: CancellationException) {
                 throw c
@@ -60,7 +60,7 @@ class ModelsViewModel(private val container: AppContainer) : ViewModel() {
                     it.copy(
                         loading = false,
                         loadedOnce = true,
-                        models = ImageCatalog.merge(emptyList()),
+                        models = ImageCatalog.appendCurated(emptyList()),
                         error = NimErrors.friendlyFor(t),
                     )
                 }

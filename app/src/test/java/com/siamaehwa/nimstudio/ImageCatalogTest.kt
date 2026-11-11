@@ -39,6 +39,19 @@ class ImageCatalogTest {
     }
 
     @Test
+    fun appendCuratedKeepsRemoteChatModels() {
+        val merged = ImageCatalog.appendCurated(
+            listOf(
+                NimModel(id = "meta/llama-3.3-70b-instruct"),
+                NimModel(id = "black-forest-labs/flux.1-dev"),
+            ),
+        )
+        assertEquals(1 + ImageCatalog.specs.size, merged.size)
+        assertTrue(merged.any { it.id == "meta/llama-3.3-70b-instruct" })
+        assertEquals(1, merged.count { it.id == "black-forest-labs/flux.1-dev" })
+    }
+
+    @Test
     fun labelFallsBackToModelId() {
         assertEquals("vendor/unknown-model", ImageCatalog.label("vendor/unknown-model"))
         assertEquals("FLUX.1 Dev", ImageCatalog.label("black-forest-labs/flux.1-dev"))

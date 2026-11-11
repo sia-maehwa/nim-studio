@@ -194,14 +194,15 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     .onSuccess { loaded.add(it) }
                     .onFailure { error = it.message }
             }
+            val hasImage = loaded.any { it is AttachmentContent.Image }
             _state.update { s ->
                 s.copy(
                     attachments = (s.attachments + loaded).take(Attachments.MAX_FILES),
                     attachmentsLoading = false,
-                    notice = error ?: if (loaded.isNotEmpty()) {
-                        "첨부 ${loaded.size}개를 추가했습니다"
-                    } else {
-                        s.notice
+                    notice = error ?: when {
+                        loaded.isEmpty() -> s.notice
+                        hasImage -> "첨부 ${loaded.size}개 추가 · 이미지는 비전(VL) 모델에서만 인식됩니다"
+                        else -> "첨부 ${loaded.size}개를 추가했습니다"
                     },
                 )
             }

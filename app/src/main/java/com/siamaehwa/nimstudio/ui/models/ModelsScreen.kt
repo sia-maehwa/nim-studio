@@ -116,6 +116,22 @@ fun ModelsScreen(onOpenChat: () -> Unit) {
         )
 
         val error = state.error
+        if (error != null && state.models.isNotEmpty()) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = "서버 목록을 불러오지 못했습니다. 내장 카탈로그만 표시합니다: $error",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
+        }
         when {
             state.loading && state.models.isEmpty() -> Box(
                 modifier = Modifier
@@ -193,7 +209,15 @@ private fun ModelRow(
             }
             Spacer(Modifier.weight(1f))
             when (test) {
-                null -> TextButton(onClick = onTest) { Text("테스트") }
+                null -> TextButton(onClick = onTest) {
+                    Text(
+                        if (ModelKinds.isLikelyImage(model.id)) {
+                            "생성 테스트"
+                        } else {
+                            "테스트"
+                        },
+                    )
+                }
                 is ModelTestState.Running -> {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(6.dp))

@@ -249,12 +249,16 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     .onSuccess { loaded.add(it) }
                     .onFailure { error = it.message }
             }
+            val hasImage = loaded.any { it is AttachmentContent.Image }
             _state.update { s ->
                 s.copy(
                     attachments = (s.attachments + loaded).take(Attachments.MAX_FILES),
                     attachmentsLoading = false,
                     banner = error ?: s.banner,
                 )
+            }
+            if (error == null && hasImage) {
+                addNotice("이미지 첨부는 비전(VL) 모델에서만 인식됩니다")
             }
         }
     }
@@ -899,7 +903,11 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
             )
         }
         try {
-            container.agentHistory.saveApiHistory(id, historyJson.encodeToString(sanitized))
+            var encoded = historyJson.encodeToString(sanitized)
+            if (encoded.length > MAX_API_JSON_CHARS) {
+                encoded = historyJson.encodeToString(sanitized.takeLast(24))
+            }
+            container.agentHistory.saveApiHistory(id, encoded)
         } catch (c: CancellationException) {
             throw c
         } catch (_: Exception) {
@@ -949,5 +957,9 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun banner(text: String) {
         _state.update { it.copy(banner = text) }
+    }
+
+    private companion object {
+        const val MAX_API_JSON_CHARS = 400_000
     }
 }

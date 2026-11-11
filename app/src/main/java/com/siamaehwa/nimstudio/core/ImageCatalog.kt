@@ -87,4 +87,9 @@ object ImageCatalog {
         }
         return (curated + extras).distinctBy { it.id }
     }
+
+    fun appendCurated(remote: List<NimModel>): List<NimModel> {
+        val missing = curatedModels().filter { curated -> remote.none { it.id == curated.id } }
+        return (remote + missing).distinctBy { it.id }.sortedBy { it.id }
+    }
 }

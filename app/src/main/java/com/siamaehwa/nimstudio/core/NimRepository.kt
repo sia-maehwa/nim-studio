@@ -33,13 +33,34 @@ class NimRepository(
         val key = store.apiKey.first() ?: return ModelTestOutcome.Failure("API 키가 설정되지 않았습니다")
         val base = store.baseUrl.first()
         return try {
-            val (sample, elapsed) = client.testChat(key, base, model)
-            ModelTestOutcome.Success(elapsed, sample.trim())
+            if (ModelKinds.isLikelyImage(model)) {
+                val started = System.nanoTime()
+                client.generateImages(key, base, testImageParams(model))
+                ModelTestOutcome.Success(
+                    latencyMs = (System.nanoTime() - started) / 1_000_000,
+                    sample = "이미지 생성 확인",
+                )
+            } else {
+                val (sample, elapsed) = client.testChat(key, base, model)
+                ModelTestOutcome.Success(elapsed, sample.trim())
+            }
         } catch (c: CancellationException) {
             throw c
         } catch (t: Exception) {
             ModelTestOutcome.Failure(NimErrors.friendlyFor(t))
         }
+    }
+
+    private fun testImageParams(model: String): ImageGenParams {
+        val spec = ImageCatalog.spec(model)
+        val side = if (spec?.squareOnly == true) 1024 else 768
+        return ImageGenParams(
+            model = model,
+            prompt = "a small blue circle centered on a white background",
+            width = side,
+            height = side,
+            steps = spec?.fixedSteps ?: (spec?.defaultSteps ?: 8).coerceAtMost(8),
+        )
     }
 
     suspend fun verifyConnection(): ConnectionCheck {
