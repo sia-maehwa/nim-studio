@@ -365,6 +365,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     )
                     val builder = StringBuilder()
                     var calls: List<AgentToolCall> = emptyList()
+                    var finishReason: String? = null
                     var lastUi = 0L
                     var firstTokenAt = 0L
 
@@ -403,6 +404,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
                                 is AgentStreamEvent.Done -> {
                                     calls = event.toolCalls
+                                    finishReason = event.finishReason
                                     event.usage?.let { usage ->
                                         val now = System.currentTimeMillis()
                                         val elapsed = if (firstTokenAt > 0L) {
@@ -454,6 +456,15 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     )
 
                     if (calls.isEmpty()) {
+                        if (finishReason != "stop") {
+                            val notice = if (finishReason == "length") {
+                                "응답이 토큰 한도에 도달해 잘렸습니다. '계속'을 요청하면 이어서 작성합니다."
+                            } else {
+                                "연결이 끊겨 응답이 중단되었습니다. 다시 요청하거나 '계속'을 입력하세요."
+                            }
+                            addNotice(notice)
+                            persist("notice", notice)
+                        }
                         completed = true
                         break
                     }

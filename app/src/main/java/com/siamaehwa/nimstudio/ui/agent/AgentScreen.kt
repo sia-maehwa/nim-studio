@@ -450,7 +450,13 @@ private fun AgentMessageItem(msg: AgentMsg, onUndo: () -> Unit) {
         }
 
         "assistant" -> Column(modifier = Modifier.fillMaxWidth()) {
-            if (msg.text.isNotBlank()) RenderedMarkdown(msg.text)
+            if (msg.text.isNotBlank()) {
+                if (msg.streaming) {
+                    Text(msg.text, style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    RenderedMarkdown(msg.text)
+                }
+            }
             if (msg.streaming) {
                 if (msg.text.isBlank()) {
                     Text(

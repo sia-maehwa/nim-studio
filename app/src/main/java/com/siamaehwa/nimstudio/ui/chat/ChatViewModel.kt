@@ -41,6 +41,7 @@ data class ChatMsg(
     val reasoning: String = "",
     val streaming: Boolean = false,
     val detail: String? = null,
+    val truncated: Boolean = false,
 )
 
 data class ChatUiState(
@@ -245,98 +246,148 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
 
-            val content = StringBuilder()
-            val reasoning = StringBuilder()
-            val channel = Channel<Pair<Boolean, String>>(Channel.UNLIMITED)
+            streamInto(
+                turns = turns,
+                assistantId = assistantId,
+                initialContent = "",
+                initialReasoning = "",
+                model = model,
+                convId = convId,
+            )
+        }
+    }
 
-            val producer = async {
-                try {
-                    container.repository
-                        .stream(model, turns, temperature = 0.7, maxTokens = 1024)
-                        .collect { event ->
-                            when (event) {
-                                is NimStreamEvent.Content -> channel.trySend(true to event.text)
-                                is NimStreamEvent.Reasoning -> channel.trySend(false to event.text)
-                                is NimStreamEvent.Finished -> {}
-                            }
-                        }
-                } finally {
-                    channel.close()
-                }
-            }
+    fun continueAnswer(id: Long) {
+        val snapshot = _state.value
+        if (snapshot.streaming) return
+        val msg = snapshot.messages.firstOrNull { it.id == id } ?: return
+        if (msg.role != "assistant" || msg.content.isBlank()) return
+        val model = snapshot.selectedModel ?: return
+        val turns = buildTurns(snapshot.preset.systemPrompt, snapshot.messages) +
+            ChatTurn("user", CONTINUE_PROMPT)
+        _state.update { s ->
+            s.copy(
+                streaming = true,
+                banner = null,
+                notice = null,
+                messages = s.messages.map {
+                    if (it.id == id) it.copy(truncated = false, detail = null) else it
+                },
+            )
+        }
+        streamJob = viewModelScope.launch {
+            streamInto(
+                turns = turns,
+                assistantId = id,
+                initialContent = msg.content,
+                initialReasoning = msg.reasoning,
+                model = model,
+                convId = snapshot.conversationId,
+            )
+        }
+    }
 
+    private suspend fun streamInto(
+        turns: List<ChatTurn>,
+        assistantId: Long,
+        initialContent: String,
+        initialReasoning: String,
+        model: String,
+        convId: Long?,
+    ) {
+        val content = StringBuilder(initialContent)
+        val reasoning = StringBuilder(initialReasoning)
+        val channel = Channel<Pair<Boolean, String>>(Channel.UNLIMITED)
+        var finishReason: String? = null
+
+        val producer = async {
             try {
-                for ((isContent, piece) in channel) {
-                    if (isContent) content.append(piece) else reasoning.append(piece)
-                    while (true) {
-                        val next = channel.tryReceive().getOrNull() ?: break
-                        if (next.first) content.append(next.second) else reasoning.append(next.second)
+                container.repository
+                    .stream(model, turns, temperature = 0.7, maxTokens = MAX_RESPONSE_TOKENS)
+                    .collect { event ->
+                        when (event) {
+                            is NimStreamEvent.Content -> channel.trySend(true to event.text)
+                            is NimStreamEvent.Reasoning -> channel.trySend(false to event.text)
+                            is NimStreamEvent.Finished -> finishReason = event.reason
+                        }
                     }
-                    updateAssistant(
-                        id = assistantId,
-                        content = content.toString(),
-                        reasoning = reasoning.toString(),
-                        streaming = true,
-                        detail = null,
-                    )
-                    delay(33)
+            } finally {
+                channel.close()
+            }
+        }
+
+        try {
+            for ((isContent, piece) in channel) {
+                if (isContent) content.append(piece) else reasoning.append(piece)
+                while (true) {
+                    val next = channel.tryReceive().getOrNull() ?: break
+                    if (next.first) content.append(next.second) else reasoning.append(next.second)
                 }
-                producer.await()
                 updateAssistant(
                     id = assistantId,
                     content = content.toString(),
                     reasoning = reasoning.toString(),
-                    streaming = false,
+                    streaming = true,
                     detail = null,
                 )
-                _state.update { it.copy(streaming = false) }
-                if (convId != null) {
-                    withContext(NonCancellable) {
-                        persistAssistant(convId, model, content.toString(), reasoning.toString())
-                    }
-                }
-            } catch (c: CancellationException) {
-                producer.cancel()
-                updateAssistant(
-                    id = assistantId,
-                    content = content.toString(),
-                    reasoning = reasoning.toString(),
-                    streaming = false,
-                    detail = null,
-                )
-                _state.update { it.copy(streaming = false) }
-                if (convId != null) {
-                    withContext(NonCancellable) {
-                        persistAssistant(convId, model, content.toString(), reasoning.toString())
-                    }
-                }
-                throw c
-            } catch (t: Exception) {
-                producer.cancel()
-                val friendly = NimErrors.friendlyFor(t)
-                val hasText = content.isNotEmpty() || reasoning.isNotEmpty()
-                _state.update { s ->
-                    s.copy(
-                        streaming = false,
-                        messages = s.messages.map { m ->
-                            if (m.id != assistantId) {
-                                m
-                            } else if (hasText) {
-                                m.copy(
-                                    content = content.toString(),
-                                    reasoning = reasoning.toString(),
-                                    streaming = false,
-                                    detail = friendly,
-                                )
-                            } else {
-                                ChatMsg(id = assistantId, role = "error", content = friendly)
-                            }
-                        },
-                    )
-                }
-                if (convId != null && hasText) {
+                delay(33)
+            }
+            producer.await()
+            updateAssistant(
+                id = assistantId,
+                content = content.toString(),
+                reasoning = reasoning.toString(),
+                streaming = false,
+                detail = null,
+                truncated = finishReason != "stop",
+            )
+            _state.update { it.copy(streaming = false) }
+            if (convId != null) {
+                withContext(NonCancellable) {
                     persistAssistant(convId, model, content.toString(), reasoning.toString())
                 }
+            }
+        } catch (c: CancellationException) {
+            producer.cancel()
+            updateAssistant(
+                id = assistantId,
+                content = content.toString(),
+                reasoning = reasoning.toString(),
+                streaming = false,
+                detail = null,
+            )
+            _state.update { it.copy(streaming = false) }
+            if (convId != null) {
+                withContext(NonCancellable) {
+                    persistAssistant(convId, model, content.toString(), reasoning.toString())
+                }
+            }
+            throw c
+        } catch (t: Exception) {
+            producer.cancel()
+            val friendly = NimErrors.friendlyFor(t)
+            val hasText = content.isNotEmpty() || reasoning.isNotEmpty()
+            _state.update { s ->
+                s.copy(
+                    streaming = false,
+                    messages = s.messages.map { m ->
+                        if (m.id != assistantId) {
+                            m
+                        } else if (hasText) {
+                            m.copy(
+                                content = content.toString(),
+                                reasoning = reasoning.toString(),
+                                streaming = false,
+                                detail = friendly,
+                            )
+                        } else {
+                            ChatMsg(id = assistantId, role = "error", content = friendly)
+                        }
+                    },
+                )
+            }
+            if (convId != null && hasText) {
+                persistAssistant(convId, model, content.toString(), reasoning.toString())
             }
         }
     }
@@ -439,6 +490,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         reasoning: String,
         streaming: Boolean,
         detail: String?,
+        truncated: Boolean = false,
     ) {
         _state.update { s ->
             s.copy(
@@ -449,6 +501,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                             reasoning = reasoning,
                             streaming = streaming,
                             detail = detail,
+                            truncated = truncated,
                         )
                     } else {
                         m
@@ -456,6 +509,13 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 },
             )
         }
+    }
+
+    private companion object {
+        const val MAX_RESPONSE_TOKENS = 4096
+        const val CONTINUE_PROMPT =
+            "이어서 계속 작성해 주세요. 앞부분을 반복하지 말고 중단된 지점부터 " +
+                "자연스럽게 바로 이어서 작성하세요."
     }
 
     private fun buildTurns(systemPrompt: String, messages: List<ChatMsg>): List<ChatTurn> {

@@ -57,7 +57,7 @@ data class ChatRequest(
     val messages: List<ChatMessage>,
     val temperature: Double = 0.7,
     @SerialName("top_p") val topP: Double = 0.95,
-    @SerialName("max_tokens") val maxTokens: Int? = 1024,
+    @SerialName("max_tokens") val maxTokens: Int? = 4096,
     val stream: Boolean = true,
     val tools: List<ToolSpec>? = null,
     @SerialName("tool_choice") val toolChoice: String? = null,

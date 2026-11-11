@@ -177,7 +177,11 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(items = reversed, key = { it.id }) { msg ->
-                    MessageItem(msg, onSaveToLibrary = { vm.saveMessageToLibrary(msg) })
+                    MessageItem(
+                        msg = msg,
+                        onSaveToLibrary = { vm.saveMessageToLibrary(msg) },
+                        onContinue = { vm.continueAnswer(msg.id) },
+                    )
                 }
             }
 
@@ -355,11 +359,15 @@ private fun formatChatDate(ms: Long): String =
     chatDateFormatter.format(Instant.ofEpochMilli(ms))
 
 @Composable
-private fun MessageItem(msg: ChatMsg, onSaveToLibrary: () -> Unit) {
+private fun MessageItem(
+    msg: ChatMsg,
+    onSaveToLibrary: () -> Unit,
+    onContinue: () -> Unit,
+) {
     when (msg.role) {
         "user" -> UserBubble(msg)
         "error" -> ErrorBubble(msg)
-        else -> AssistantMessage(msg, onSaveToLibrary)
+        else -> AssistantMessage(msg, onSaveToLibrary, onContinue)
     }
 }
 
@@ -384,14 +392,31 @@ private fun UserBubble(msg: ChatMsg) {
 }
 
 @Composable
-private fun AssistantMessage(msg: ChatMsg, onSaveToLibrary: () -> Unit) {
+private fun AssistantMessage(
+    msg: ChatMsg,
+    onSaveToLibrary: () -> Unit,
+    onContinue: () -> Unit,
+) {
     Column(modifier = Modifier.fillMaxWidth()) {
         if (msg.reasoning.isNotBlank()) {
             ReasoningBlock(msg.reasoning, live = msg.streaming)
             Spacer(Modifier.height(6.dp))
         }
         if (msg.content.isNotBlank()) {
-            RenderedMarkdown(msg.content)
+            if (msg.streaming) {
+                Text(msg.content, style = MaterialTheme.typography.bodyLarge)
+            } else {
+                RenderedMarkdown(msg.content)
+            }
+        }
+        if (msg.truncated && !msg.streaming) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "응답이 끝까지 완료되지 않았습니다(길이 제한 또는 연결 종료). 이어서 생성할 수 있습니다.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+            TextButton(onClick = onContinue) { Text("이어서 생성") }
         }
         if (msg.streaming) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -458,7 +483,7 @@ private fun ErrorBubble(msg: ChatMsg) {
 
 @Composable
 private fun ReasoningBlock(reasoning: String, live: Boolean) {
-    var expanded by remember { mutableStateOf(true) }
+    var expanded by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()

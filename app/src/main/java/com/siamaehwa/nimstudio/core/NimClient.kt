@@ -131,7 +131,7 @@ class NimClient {
         model: String,
         turns: List<ChatTurn>,
         temperature: Double = 0.7,
-        maxTokens: Int = 1024,
+        maxTokens: Int = 4096,
     ): Flow<NimStreamEvent> = flow {
         val payload = ChatRequest(
             model = model,
@@ -145,6 +145,8 @@ class NimClient {
             .url(normalizeBase(baseUrl) + "/chat/completions")
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("Accept-Encoding", "identity")
             .post(json.encodeToString(ChatRequest.serializer(), payload).toRequestBody(jsonMedia))
             .build()
 
@@ -157,13 +159,18 @@ class NimClient {
                 throw apiException(response.code, bodyText)
             }
             val source = response.body?.source() ?: throw IOException("응답 본문이 비어 있습니다")
+            var finishReason: String? = null
+            var sawDone = false
             while (true) {
                 coroutineContext.ensureActive()
                 val line = source.readUtf8Line() ?: break
                 if (!line.startsWith("data:")) continue
                 val payloadLine = line.removePrefix("data:").trim()
                 if (payloadLine.isEmpty()) continue
-                if (payloadLine == "[DONE]") break
+                if (payloadLine == "[DONE]") {
+                    sawDone = true
+                    break
+                }
                 val chunk = runCatching {
                     json.decodeFromString(ChatChunk.serializer(), payloadLine)
                 }.getOrNull() ?: continue
@@ -175,8 +182,9 @@ class NimClient {
                     val reasoning = delta.reasoningContent
                     if (!reasoning.isNullOrEmpty()) emit(NimStreamEvent.Reasoning(reasoning))
                 }
-                choice.finishReason?.let { emit(NimStreamEvent.Finished(it)) }
+                choice.finishReason?.let { finishReason = normalizeFinishReason(it) }
             }
+            emit(NimStreamEvent.Finished(finishReason ?: if (sawDone) "stop" else null))
         }
     }.flowOn(Dispatchers.IO)
 
@@ -405,7 +413,7 @@ class NimClient {
         messages: List<ChatMessage>,
         tools: List<ToolSpec>,
         temperature: Double = 0.2,
-        maxTokens: Int = 2048,
+        maxTokens: Int = 4096,
     ): Flow<AgentStreamEvent> = flow {
         val payload = ChatRequest(
             model = model,
@@ -422,6 +430,8 @@ class NimClient {
             .url(normalizeBase(baseUrl) + "/chat/completions")
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("Accept-Encoding", "identity")
             .post(json.encodeToString(ChatRequest.serializer(), payload).toRequestBody(jsonMedia))
             .build()
 
@@ -431,6 +441,7 @@ class NimClient {
         val accumulated = LinkedHashMap<Int, MutableAgentCall>()
         var finishReason: String? = null
         var usage: TokenUsage? = null
+        var sawDone = false
 
         call.execute().use { response ->
             if (!response.isSuccessful) {
@@ -444,7 +455,10 @@ class NimClient {
                 if (!line.startsWith("data:")) continue
                 val payloadLine = line.removePrefix("data:").trim()
                 if (payloadLine.isEmpty()) continue
-                if (payloadLine == "[DONE]") break
+                if (payloadLine == "[DONE]") {
+                    sawDone = true
+                    break
+                }
                 val chunk = runCatching {
                     json.decodeFromString(ChatChunk.serializer(), payloadLine)
                 }.getOrNull() ?: continue
@@ -462,7 +476,7 @@ class NimClient {
                         tc.function?.arguments?.let { acc.arguments.append(it) }
                     }
                 }
-                choice.finishReason?.let { finishReason = it }
+                choice.finishReason?.let { finishReason = normalizeFinishReason(it) }
             }
         }
 
@@ -475,13 +489,18 @@ class NimClient {
                     arguments = acc.arguments.toString().ifBlank { "{}" },
                 )
             }
-        emit(AgentStreamEvent.Done(calls, finishReason, usage))
+        emit(AgentStreamEvent.Done(calls, finishReason ?: if (sawDone) "stop" else null, usage))
     }.flowOn(Dispatchers.IO)
 
     private class MutableAgentCall {
         var id: String = ""
         var name: String = ""
         val arguments = StringBuilder()
+    }
+
+    private fun normalizeFinishReason(reason: String): String = when (reason) {
+        "end_turn", "eos", "completed" -> "stop"
+        else -> reason
     }
 
     private fun normalizeBase(baseUrl: String): String = baseUrl.trim().trimEnd('/')
