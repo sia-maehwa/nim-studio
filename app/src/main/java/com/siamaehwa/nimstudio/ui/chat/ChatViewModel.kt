@@ -377,7 +377,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
 
-            streamInto(
+            runStreamWithAutoContinue(
                 turns = turns,
                 assistantId = assistantId,
                 initialContent = "",
@@ -385,6 +385,51 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 model = model,
                 convId = convId,
                 reasoningEffort = reasoning,
+            )
+        }
+    }
+
+    private suspend fun runStreamWithAutoContinue(
+        turns: List<ChatTurn>,
+        assistantId: Long,
+        initialContent: String,
+        initialReasoning: String,
+        model: String,
+        convId: Long?,
+        reasoningEffort: String?,
+    ) {
+        streamInto(
+            turns = turns,
+            assistantId = assistantId,
+            initialContent = initialContent,
+            initialReasoning = initialReasoning,
+            model = model,
+            convId = convId,
+            reasoningEffort = reasoningEffort,
+        )
+        var auto = 0
+        while (true) {
+            val msg = _state.value.messages.firstOrNull { it.id == assistantId } ?: return
+            if (!msg.truncated || msg.content.isBlank() || auto >= MAX_AUTO_CONTINUES) break
+            auto++
+            _state.update {
+                it.copy(
+                    notice = "토큰 한도로 잘려 자동으로 이어서 생성합니다 " +
+                        "($auto/$MAX_AUTO_CONTINUES)",
+                )
+            }
+            val continueTurns = buildTurns(
+                _state.value.preset.systemPrompt,
+                _state.value.messages,
+            ) + ChatTurn("user", CONTINUE_PROMPT)
+            streamInto(
+                turns = continueTurns,
+                assistantId = assistantId,
+                initialContent = msg.content,
+                initialReasoning = msg.reasoning,
+                model = model,
+                convId = convId,
+                reasoningEffort = reasoningEffort,
             )
         }
     }
@@ -412,7 +457,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         }
         val reasoning = snapshot.reasoning.id
         streamJob = viewModelScope.launch {
-            streamInto(
+            runStreamWithAutoContinue(
                 turns = turns,
                 assistantId = id,
                 initialContent = msg.content,
@@ -714,6 +759,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
 
     private companion object {
         const val MAX_RESPONSE_TOKENS = 16384
+        const val MAX_AUTO_CONTINUES = 3
         const val CONTINUE_PROMPT =
             "이어서 계속 작성해 주세요. 앞부분을 반복하지 말고 중단된 지점부터 " +
                 "자연스럽게 바로 이어서 작성하세요."

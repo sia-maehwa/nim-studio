@@ -118,7 +118,7 @@ data class AgentUiState(
     val banner: String? = null,
 ) {
     companion object {
-        const val MAX_STEPS = 12
+        const val MAX_STEPS = 24
     }
 }
 
@@ -471,6 +471,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 ?.joinToString(", ") { if (it.isDir) it.name + "/" else it.name }
                 .orEmpty()
             var completed = false
+            var autoContinues = 0
             var activeCalls: List<AgentToolCall> = emptyList()
             val responded = mutableSetOf<String>()
             try {
@@ -612,9 +613,28 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     persistApiHistory()
 
                     if (calls.isEmpty()) {
+                        if (finishReason == "length" &&
+                            assistantText.isNotBlank() &&
+                            autoContinues < MAX_AUTO_CONTINUES
+                        ) {
+                            autoContinues++
+                            apiHistory.add(
+                                ChatMessage(
+                                    role = "user",
+                                    content = textContent(CONTINUE_INSTRUCTION),
+                                ),
+                            )
+                            persistApiHistory()
+                            val notice = "토큰 한도로 잘려 자동으로 이어서 생성합니다 " +
+                                "($autoContinues/$MAX_AUTO_CONTINUES)"
+                            addNotice(notice)
+                            persist("notice", notice)
+                            continue
+                        }
                         if (finishReason != "stop") {
                             val notice = if (finishReason == "length") {
-                                "응답이 토큰 한도에 도달해 잘렸습니다. '계속'을 요청하면 이어서 작성합니다."
+                                "자동 이어쓰기 한도(${MAX_AUTO_CONTINUES}회)에 도달했습니다. " +
+                                    "'계속'을 입력하면 더 이어갑니다."
                             } else {
                                 "연결이 끊겨 응답이 중단되었습니다. 다시 요청하거나 '계속'을 입력하세요."
                             }
@@ -1115,6 +1135,10 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     private companion object {
         const val MAX_API_JSON_CHARS = 400_000
         const val MAX_AGENT_TOKENS = 16384
+        const val MAX_AUTO_CONTINUES = 4
+        const val CONTINUE_INSTRUCTION =
+            "이어서 계속 작성해 주세요. 앞부분을 반복하지 말고 중단된 지점부터 " +
+                "바로 이어서 쓰세요."
         val GATED_TOOLS = setOf("write_file", "edit_file")
     }
 }

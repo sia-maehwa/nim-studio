@@ -468,7 +468,8 @@ private fun AssistantMessage(
         if (msg.truncated && !msg.streaming) {
             Spacer(Modifier.height(6.dp))
             Text(
-                "응답이 끝까지 완료되지 않았습니다(길이 제한 또는 연결 종료). 이어서 생성할 수 있습니다.",
+                "자동 이어쓰기 한도에 도달했습니다(길이 제한 또는 연결 종료). " +
+                    "아래 버튼으로 계속 생성할 수 있습니다.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
