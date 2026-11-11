@@ -15,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -294,7 +295,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         initialReasoning: String,
         model: String,
         convId: Long?,
-    ) {
+    ): Unit = coroutineScope {
         val content = StringBuilder(initialContent)
         val reasoning = StringBuilder(initialReasoning)
         val channel = Channel<Pair<Boolean, String>>(Channel.UNLIMITED)
