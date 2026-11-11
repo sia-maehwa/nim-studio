@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -126,6 +127,7 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
             title = "채팅",
             subtitle = buildString {
                 append(state.selectedModel ?: "모델을 선택하세요")
+                if (state.searching) append(" · 웹 검색 중…")
                 if (state.tokens > 0) {
                     append(" · ")
                     append(tokenLabel(state.tokens, state.tokensExact, state.tokensPerSecond))
@@ -134,6 +136,21 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         ) {
             IconButton(onClick = { showConversations = true }) {
                 Icon(Icons.Filled.History, contentDescription = "대화 목록")
+            }
+            IconButton(onClick = { vm.setWebSearch(!state.webSearch) }) {
+                Icon(
+                    Icons.Filled.TravelExplore,
+                    contentDescription = if (state.webSearch) {
+                        "웹 검색 끄기"
+                    } else {
+                        "웹 검색 켜기"
+                    },
+                    tint = if (state.webSearch) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
             }
             IconButton(
                 onClick = {

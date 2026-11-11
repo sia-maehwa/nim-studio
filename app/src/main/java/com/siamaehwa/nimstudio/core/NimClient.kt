@@ -84,6 +84,12 @@ class NimClient {
         .readTimeout(600, TimeUnit.SECONDS)
         .build()
 
+    private val streamHttp = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .build()
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     suspend fun fetchModels(apiKey: String, baseUrl: String): List<NimModel> =
@@ -210,7 +216,7 @@ class NimClient {
             .post(json.encodeToString(ChatRequest.serializer(), payload).toRequestBody(jsonMedia))
             .build()
 
-        val call = http.newCall(request)
+        val call = streamHttp.newCall(request)
         coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
 
         call.execute().use { response ->
@@ -652,7 +658,7 @@ class NimClient {
             .post(json.encodeToString(ChatRequest.serializer(), payload).toRequestBody(jsonMedia))
             .build()
 
-        val call = http.newCall(request)
+        val call = streamHttp.newCall(request)
         coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
 
         val accumulated = LinkedHashMap<Int, MutableAgentCall>()

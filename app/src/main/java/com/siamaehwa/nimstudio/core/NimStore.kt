@@ -24,6 +24,7 @@ class NimStore(private val context: Context) {
         private val KEY_AGENT_REASONING = stringPreferencesKey("agent_reasoning")
         private val KEY_AGENT_PERMISSION = stringPreferencesKey("agent_permission")
         private val KEY_KEEP_ALIVE = booleanPreferencesKey("keep_alive")
+        private val KEY_CHAT_WEB = booleanPreferencesKey("chat_web_search")
     }
 
     val apiKey: Flow<String?> = context.nimDataStore.data.map { prefs ->
@@ -116,6 +117,14 @@ class NimStore(private val context: Context) {
 
     suspend fun saveKeepAlive(enabled: Boolean) {
         context.nimDataStore.edit { prefs -> prefs[KEY_KEEP_ALIVE] = enabled }
+    }
+
+    val chatWebSearch: Flow<Boolean> = context.nimDataStore.data.map { prefs ->
+        prefs[KEY_CHAT_WEB] == true
+    }
+
+    suspend fun saveChatWebSearch(enabled: Boolean) {
+        context.nimDataStore.edit { prefs -> prefs[KEY_CHAT_WEB] = enabled }
     }
 
     /** null이면 시스템 설정을 따릅니다. */

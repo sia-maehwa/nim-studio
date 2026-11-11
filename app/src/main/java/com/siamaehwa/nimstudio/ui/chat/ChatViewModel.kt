@@ -17,6 +17,7 @@ import com.siamaehwa.nimstudio.core.TokenEstimator
 import com.siamaehwa.nimstudio.core.TokenUsage
 import com.siamaehwa.nimstudio.core.db.ConversationEntity
 import com.siamaehwa.nimstudio.core.db.MessageEntity
+import com.siamaehwa.nimstudio.core.web.WebSearch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -61,6 +62,8 @@ data class ChatUiState(
     val selectedModel: String? = null,
     val preset: ChatPreset = ChatPreset.General,
     val reasoning: ReasoningEffort = ReasoningEffort.Default,
+    val webSearch: Boolean = false,
+    val searching: Boolean = false,
     val messages: List<ChatMsg> = emptyList(),
     val attachments: List<AttachmentContent> = emptyList(),
     val attachmentsLoading: Boolean = false,
@@ -102,6 +105,11 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.store.chatReasoning.collect { effort ->
                 _state.update { it.copy(reasoning = effort) }
+            }
+        }
+        viewModelScope.launch {
+            container.store.chatWebSearch.collect { enabled ->
+                _state.update { it.copy(webSearch = enabled) }
             }
         }
         viewModelScope.launch {
@@ -176,6 +184,11 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     fun setReasoning(effort: ReasoningEffort) {
         _state.update { it.copy(reasoning = effort) }
         viewModelScope.launch { container.store.saveChatReasoning(effort) }
+    }
+
+    fun setWebSearch(enabled: Boolean) {
+        _state.update { it.copy(webSearch = enabled) }
+        viewModelScope.launch { container.store.saveChatWebSearch(enabled) }
     }
 
     fun addAttachments(uris: List<android.net.Uri>) {
@@ -313,8 +326,10 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             )
         }
 
-        val turns = buildTurns(snapshot.preset.systemPrompt, snapshot.messages + userMsg)
+        val baseTurns = buildTurns(snapshot.preset.systemPrompt, snapshot.messages + userMsg)
         val reasoning = snapshot.reasoning.id
+        val useWeb = prompt.isNotBlank() &&
+            (snapshot.webSearch || WebSearch.looksTimeSensitive(prompt))
 
         streamJob = viewModelScope.launch {
             val convId = runCatching {
@@ -333,6 +348,32 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                             createdAt = System.currentTimeMillis(),
                         ),
                     )
+                }
+            }
+
+            var turns = baseTurns
+            if (useWeb) {
+                _state.update { it.copy(searching = true, notice = "웹 검색 중…") }
+                val results = runCatching { WebSearch.search(prompt) }.getOrNull().orEmpty()
+                val context = if (results.isNotEmpty()) {
+                    WebSearch.format(results, prompt)
+                } else {
+                    null
+                }
+                _state.update {
+                    it.copy(
+                        searching = false,
+                        notice = if (context == null) {
+                            "웹 검색 결과를 찾지 못했습니다"
+                        } else {
+                            "웹 검색 결과 ${results.size}건을 반영합니다"
+                        },
+                    )
+                }
+                if (context != null && baseTurns.firstOrNull()?.role == "system") {
+                    turns = listOf(baseTurns.first()) +
+                        ChatTurn("system", context) +
+                        baseTurns.drop(1)
                 }
             }
 

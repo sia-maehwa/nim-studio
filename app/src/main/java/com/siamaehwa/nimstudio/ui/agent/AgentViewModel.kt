@@ -25,6 +25,7 @@ import com.siamaehwa.nimstudio.core.agent.ToolOutcome
 import com.siamaehwa.nimstudio.core.agent.UndoInfo
 import com.siamaehwa.nimstudio.core.agent.Workspace
 import com.siamaehwa.nimstudio.core.asMessageText
+import com.siamaehwa.nimstudio.core.web.WebSearch
 import com.siamaehwa.nimstudio.core.db.AgentSessionSummary
 import com.siamaehwa.nimstudio.core.plugin.PluginManifest
 import com.siamaehwa.nimstudio.core.plugin.PluginTool
@@ -649,6 +650,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         val gated = call.name in GATED_TOOLS || pluginTool != null
                         val permissionMode = _state.value.permission
                         val outcome = when {
+                            call.name == "web_search" -> handleWebSearch(call)
                             call.name == "ask_user" -> handleAskUser(call)
                             call.name == "todo_write" -> handleTodoWrite(call)
                             gated && permissionMode == AgentPermission.ReadOnly -> ToolOutcome(
@@ -766,6 +768,46 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    private suspend fun handleWebSearch(call: AgentToolCall): ToolOutcome {
+        val args = parseArgs(call.arguments)
+        val query = (args?.get("query") as? JsonPrimitive)?.contentOrNull?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return ToolOutcome(
+                summary = "web_search · 오류",
+                detail = "query가 필요합니다",
+                result = "ERROR: query 파라미터가 필요합니다",
+                isError = true,
+            )
+        return try {
+            val results = WebSearch.search(query)
+            if (results.isEmpty()) {
+                ToolOutcome(
+                    summary = "web_search · 결과 없음",
+                    detail = "검색 결과가 없습니다: $query",
+                    result = "웹 검색 결과가 없습니다.",
+                )
+            } else {
+                val formatted = WebSearch.format(results, query)
+                ToolOutcome(
+                    summary = "web_search · ${results.size}건",
+                    detail = results.joinToString("\n") {
+                        "${it.title} — ${it.snippet}"
+                    }.take(1500),
+                    result = formatted.take(6000),
+                )
+            }
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Exception) {
+            ToolOutcome(
+                summary = "web_search · 오류",
+                detail = t.message ?: "웹 검색 실패",
+                result = "ERROR: ${t.message ?: "웹 검색 실패"}",
+                isError = true,
+            )
+        }
+    }
+
     private suspend fun requestPermission(call: AgentToolCall): Boolean {
         val deferred = CompletableDeferred<Boolean>()
         permissionDeferred = deferred
@@ -868,6 +910,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         appendLine("- 수정 전에 반드시 read_file로 현재 내용을 확인하세요.")
         appendLine("- 부분 수정은 edit_file(정확히 일치하는 old_string), 새 파일/전체 교체는 write_file을 쓰세요.")
         appendLine("- 여러 단계 작업은 todo_write로 계획을 세우고, 진행할 때마다 전체 목록을 갱신하세요.")
+        appendLine("- 최신 뉴스·시사·근황처럼 지식 컷오프 이후 정보가 필요하면 web_search 도구로 검색하세요.")
         appendLine("- 사용자 결정이 필요하면 ask_user로 질문하세요. 선택지를 options에 넣으면 버튼으로 표시됩니다.")
         appendLine("- 셸/터미널은 없습니다. 빌드·실행은 사용자가 Termux에서 직접 합니다.")
         appendLine("- 요청이 모호하면 한 번만 짧게 되물어보세요.")

@@ -79,6 +79,14 @@ class AgentTools(private val workspace: Workspace) {
                 },
             ),
             tool(
+                name = "web_search",
+                description = "최신 뉴스·시사·근황 등 지식 컷오프 이후 정보가 필요할 때 웹을 검색합니다.",
+                required = listOf("query"),
+                params = {
+                    str("query", "검색어")
+                },
+            ),
+            tool(
                 name = "ask_user",
                 description = "작업 방향이 모호하거나 사용자 결정이 필요할 때 질문합니다. options가 있으면 버튼으로 표시됩니다.",
                 required = listOf("question"),
