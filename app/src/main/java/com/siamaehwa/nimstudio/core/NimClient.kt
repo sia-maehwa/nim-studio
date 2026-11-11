@@ -58,6 +58,7 @@ sealed interface AgentStreamEvent {
     data class Done(
         val toolCalls: List<AgentToolCall>,
         val finishReason: String?,
+        val usage: TokenUsage? = null,
     ) : AgentStreamEvent
 }
 
@@ -278,6 +279,7 @@ class NimClient {
             stream = true,
             tools = tools,
             toolChoice = "auto",
+            streamOptions = StreamOptions(includeUsage = true),
         )
         val request = Request.Builder()
             .url(normalizeBase(baseUrl) + "/chat/completions")
@@ -291,6 +293,7 @@ class NimClient {
 
         val accumulated = LinkedHashMap<Int, MutableAgentCall>()
         var finishReason: String? = null
+        var usage: TokenUsage? = null
 
         call.execute().use { response ->
             if (!response.isSuccessful) {
@@ -308,6 +311,7 @@ class NimClient {
                 val chunk = runCatching {
                     json.decodeFromString(ChatChunk.serializer(), payloadLine)
                 }.getOrNull() ?: continue
+                chunk.usage?.let { usage = it }
                 val choice = chunk.choices.firstOrNull() ?: continue
                 val delta = choice.delta
                 if (delta != null) {
@@ -334,7 +338,7 @@ class NimClient {
                     arguments = acc.arguments.toString().ifBlank { "{}" },
                 )
             }
-        emit(AgentStreamEvent.Done(calls, finishReason))
+        emit(AgentStreamEvent.Done(calls, finishReason, usage))
     }.flowOn(Dispatchers.IO)
 
     private class MutableAgentCall {

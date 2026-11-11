@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,8 +39,11 @@ import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.KeyboardHide
+import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
@@ -63,6 +67,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,6 +75,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -86,6 +93,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(onOpenSettings: () -> Unit) {
@@ -95,6 +103,10 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     var draft by rememberSaveable { mutableStateOf("") }
     var showConversations by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val systemDark = isSystemInDarkTheme()
+    val darkMode by app.container.store.darkMode.collectAsStateWithLifecycle(initialValue = null)
+    val isDark = darkMode ?: systemDark
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
@@ -103,6 +115,16 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
         ) {
             IconButton(onClick = { showConversations = true }) {
                 Icon(Icons.Filled.History, contentDescription = "대화 목록")
+            }
+            IconButton(
+                onClick = {
+                    scope.launch { app.container.store.saveDarkMode(!isDark) }
+                },
+            ) {
+                Icon(
+                    imageVector = if (isDark) Icons.Filled.LightMode else Icons.Filled.DarkMode,
+                    contentDescription = if (isDark) "라이트 모드로 전환" else "다크 모드로 전환",
+                )
             }
             ModelPicker(
                 models = state.chatModels,
@@ -663,6 +685,8 @@ private fun InputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -677,6 +701,17 @@ private fun InputBar(
             placeholder = { Text("메시지 입력…") },
             maxLines = 6,
             shape = RoundedCornerShape(18.dp),
+            trailingIcon = {
+                IconButton(onClick = {
+                    keyboard?.hide()
+                    focus.clearFocus()
+                }) {
+                    Icon(
+                        Icons.Filled.KeyboardHide,
+                        contentDescription = "키보드 내리기",
+                    )
+                }
+            },
         )
         Spacer(Modifier.width(8.dp))
         FilledIconButton(

@@ -10,6 +10,7 @@ import com.siamaehwa.nimstudio.core.ChatMessage
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.TokenEstimator
 import com.siamaehwa.nimstudio.core.ToolCall
 import com.siamaehwa.nimstudio.core.ToolCallFunction
 import com.siamaehwa.nimstudio.core.agent.AgentTools
@@ -69,11 +70,18 @@ data class AgentUiState(
     val messages: List<AgentMsg> = emptyList(),
     val running: Boolean = false,
     val step: Int = 0,
+    val maxSteps: Int = MAX_STEPS,
+    val tokens: Int = 0,
+    val tokensExact: Boolean = false,
     val todos: List<AgentTodo> = emptyList(),
     val pendingQuestion: AgentQuestion? = null,
     val pluginToolCount: Int = 0,
     val banner: String? = null,
-)
+) {
+    companion object {
+        const val MAX_STEPS = 12
+    }
+}
 
 private val TODO_STATUSES = setOf("pending", "in_progress", "completed", "cancelled")
 
@@ -201,6 +209,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         fileCount = ws.fileCount,
                         messages = emptyList(),
                         todos = emptyList(),
+                        tokens = 0,
+                        tokensExact = false,
                         banner = null,
                     )
                 }
@@ -233,6 +243,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 messages = emptyList(),
                 todos = emptyList(),
                 pendingQuestion = null,
+                tokens = 0,
+                tokensExact = false,
                 banner = null,
             )
         }
@@ -309,16 +321,19 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 ?.take(40)
                 ?.joinToString(", ") { if (it.isDir) it.name + "/" else it.name }
                 .orEmpty()
-            var step = 0
+            var completed = false
             var activeCalls: List<AgentToolCall> = emptyList()
             val responded = mutableSetOf<String>()
             try {
-                while (true) {
-                    step++
+                for (step in 1..AgentUiState.MAX_STEPS) {
                     _state.update { it.copy(step = step) }
                     val messages = listOf(
                         ChatMessage(role = "system", content = systemPrompt(ws, rootListing)),
                     ) + apiHistory
+                    val promptEstimate = TokenEstimator.estimate(
+                        messages.joinToString("\n") { it.content.orEmpty() },
+                    )
+                    _state.update { it.copy(tokens = promptEstimate, tokensExact = false) }
 
                     val assistantId = nextId++
                     addMessage(
@@ -339,10 +354,25 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                         updateMessage(assistantId) {
                                             it.copy(text = builder.toString())
                                         }
+                                        val live = promptEstimate +
+                                            TokenEstimator.estimate(builder.toString())
+                                        _state.update {
+                                            it.copy(tokens = live, tokensExact = false)
+                                        }
                                     }
                                 }
 
-                                is AgentStreamEvent.Done -> calls = event.toolCalls
+                                is AgentStreamEvent.Done -> {
+                                    calls = event.toolCalls
+                                    event.usage?.let { usage ->
+                                        _state.update {
+                                            it.copy(
+                                                tokens = usage.totalTokens,
+                                                tokensExact = true,
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -367,7 +397,10 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         ),
                     )
 
-                    if (calls.isEmpty()) break
+                    if (calls.isEmpty()) {
+                        completed = true
+                        break
+                    }
 
                     activeCalls = calls
                     responded.clear()
@@ -416,6 +449,12 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         )
                         responded.add(call.id)
                     }
+                }
+                if (!completed) {
+                    addNotice(
+                        "최대 단계(${AgentUiState.MAX_STEPS})에 도달했습니다. " +
+                            "계속하려면 다시 요청하세요.",
+                    )
                 }
             } catch (c: CancellationException) {
                 respondMissing(activeCalls, responded)

@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Refresh
@@ -76,6 +77,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,8 +109,16 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "에이전트",
-            subtitle = state.workspaceName
-                ?: if (state.workspaceLoading) "폴더 분석 중…" else "작업 폴더를 선택하세요",
+            subtitle = buildString {
+                append(
+                    state.workspaceName
+                        ?: if (state.workspaceLoading) "폴더 분석 중…" else "작업 폴더를 선택하세요",
+                )
+                if (state.tokens > 0) {
+                    append(" · ")
+                    append(tokenLabel(state.tokens, state.tokensExact))
+                }
+            },
         ) {
             IconButton(onClick = { folderPicker.launch(null) }) {
                 Icon(Icons.Filled.FolderOpen, contentDescription = "작업 폴더 선택")
@@ -197,7 +208,12 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "작업 중… 단계 ${state.step}",
+                            "작업 중… 단계 ${state.step}/${state.maxSteps}" +
+                                if (state.tokens > 0) {
+                                    " · ${tokenLabel(state.tokens, state.tokensExact)}"
+                                } else {
+                                    ""
+                                },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -639,6 +655,8 @@ private fun AgentInputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = LocalFocusManager.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -653,6 +671,17 @@ private fun AgentInputBar(
             placeholder = { Text("예: 채팅 화면에 다크 모드 토글 추가해줘") },
             maxLines = 5,
             shape = RoundedCornerShape(18.dp),
+            trailingIcon = {
+                IconButton(onClick = {
+                    keyboard?.hide()
+                    focus.clearFocus()
+                }) {
+                    Icon(
+                        Icons.Filled.KeyboardHide,
+                        contentDescription = "키보드 내리기",
+                    )
+                }
+            },
         )
         Spacer(Modifier.width(8.dp))
         FilledIconButton(
@@ -667,3 +696,6 @@ private fun AgentInputBar(
         }
     }
 }
+
+private fun tokenLabel(tokens: Int, exact: Boolean): String =
+    "tok " + (if (exact) "" else "≈") + "%,d".format(tokens)

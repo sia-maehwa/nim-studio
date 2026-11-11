@@ -61,11 +61,25 @@ data class ChatRequest(
     val stream: Boolean = true,
     val tools: List<ToolSpec>? = null,
     @SerialName("tool_choice") val toolChoice: String? = null,
+    @SerialName("stream_options") val streamOptions: StreamOptions? = null,
+)
+
+@Serializable
+data class StreamOptions(
+    @SerialName("include_usage") val includeUsage: Boolean = true,
+)
+
+@Serializable
+data class TokenUsage(
+    @SerialName("prompt_tokens") val promptTokens: Int = 0,
+    @SerialName("completion_tokens") val completionTokens: Int = 0,
+    @SerialName("total_tokens") val totalTokens: Int = 0,
 )
 
 @Serializable
 data class ChatChunk(
     val choices: List<ChatChunkChoice> = emptyList(),
+    val usage: TokenUsage? = null,
 )
 
 @Serializable
