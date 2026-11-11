@@ -73,6 +73,7 @@ data class AgentUiState(
     val maxSteps: Int = MAX_STEPS,
     val tokens: Int = 0,
     val tokensExact: Boolean = false,
+    val tokensPerSecond: Int = 0,
     val todos: List<AgentTodo> = emptyList(),
     val pendingQuestion: AgentQuestion? = null,
     val pluginToolCount: Int = 0,
@@ -211,6 +212,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         todos = emptyList(),
                         tokens = 0,
                         tokensExact = false,
+                        tokensPerSecond = 0,
                         banner = null,
                     )
                 }
@@ -245,6 +247,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 pendingQuestion = null,
                 tokens = 0,
                 tokensExact = false,
+                tokensPerSecond = 0,
                 banner = null,
             )
         }
@@ -333,7 +336,9 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     val promptEstimate = TokenEstimator.estimate(
                         messages.joinToString("\n") { it.content.orEmpty() },
                     )
-                    _state.update { it.copy(tokens = promptEstimate, tokensExact = false) }
+                    _state.update {
+                        it.copy(tokens = promptEstimate, tokensExact = false, tokensPerSecond = 0)
+                    }
 
                     val assistantId = nextId++
                     addMessage(
@@ -342,6 +347,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     val builder = StringBuilder()
                     var calls: List<AgentToolCall> = emptyList()
                     var lastUi = 0L
+                    var firstTokenAt = 0L
 
                     container.repository.streamAgent(model, messages, specs)
                         .collect { event ->
@@ -349,15 +355,29 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 is AgentStreamEvent.Content -> {
                                     builder.append(event.text)
                                     val now = System.currentTimeMillis()
+                                    if (firstTokenAt == 0L) firstTokenAt = now
                                     if (now - lastUi > 40) {
                                         lastUi = now
                                         updateMessage(assistantId) {
                                             it.copy(text = builder.toString())
                                         }
-                                        val live = promptEstimate +
-                                            TokenEstimator.estimate(builder.toString())
+                                        val completion = TokenEstimator.estimate(builder.toString())
+                                        val elapsed = if (firstTokenAt > 0L) {
+                                            (now - firstTokenAt).coerceAtLeast(1L)
+                                        } else {
+                                            0L
+                                        }
+                                        val speed = if (elapsed >= 250L) {
+                                            (completion * 1000.0 / elapsed).toInt()
+                                        } else {
+                                            0
+                                        }
                                         _state.update {
-                                            it.copy(tokens = live, tokensExact = false)
+                                            it.copy(
+                                                tokens = promptEstimate + completion,
+                                                tokensExact = false,
+                                                tokensPerSecond = speed,
+                                            )
                                         }
                                     }
                                 }
@@ -365,10 +385,24 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 is AgentStreamEvent.Done -> {
                                     calls = event.toolCalls
                                     event.usage?.let { usage ->
+                                        val now = System.currentTimeMillis()
+                                        val elapsed = if (firstTokenAt > 0L) {
+                                            (now - firstTokenAt).coerceAtLeast(1L)
+                                        } else {
+                                            0L
+                                        }
+                                        val speed = if (elapsed >= 250L &&
+                                            usage.completionTokens > 0
+                                        ) {
+                                            (usage.completionTokens * 1000.0 / elapsed).toInt()
+                                        } else {
+                                            0
+                                        }
                                         _state.update {
                                             it.copy(
                                                 tokens = usage.totalTokens,
                                                 tokensExact = true,
+                                                tokensPerSecond = speed,
                                             )
                                         }
                                     }

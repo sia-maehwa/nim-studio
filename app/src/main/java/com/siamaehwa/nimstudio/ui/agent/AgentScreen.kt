@@ -116,7 +116,7 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                 )
                 if (state.tokens > 0) {
                     append(" · ")
-                    append(tokenLabel(state.tokens, state.tokensExact))
+                    append(tokenLabel(state.tokens, state.tokensExact, state.tokensPerSecond))
                 }
             },
         ) {
@@ -210,7 +210,7 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                         Text(
                             "작업 중… 단계 ${state.step}/${state.maxSteps}" +
                                 if (state.tokens > 0) {
-                                    " · ${tokenLabel(state.tokens, state.tokensExact)}"
+                                    " · ${tokenLabel(state.tokens, state.tokensExact, state.tokensPerSecond)}"
                                 } else {
                                     ""
                                 },
@@ -697,5 +697,9 @@ private fun AgentInputBar(
     }
 }
 
-private fun tokenLabel(tokens: Int, exact: Boolean): String =
-    "tok " + (if (exact) "" else "≈") + "%,d".format(tokens)
+private fun tokenLabel(tokens: Int, exact: Boolean, speed: Int): String = buildString {
+    append("tok ")
+    if (!exact) append("≈")
+    append("%,d".format(tokens))
+    if (speed > 0) append(" · ").append(speed).append(" tok/s")
+}
