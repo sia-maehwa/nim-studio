@@ -20,6 +20,12 @@ object ModelKinds {
         "playground-v",
         "sd3",
         "imagegen",
+        "qwen-image",
+        "qwen_image",
+        "imagen",
+        "seedream",
+        "sana-",
+        "sd-3",
     )
 
     private val nonChatHints = listOf(

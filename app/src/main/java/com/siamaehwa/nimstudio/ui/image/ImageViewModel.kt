@@ -3,8 +3,8 @@ package com.siamaehwa.nimstudio.ui.image
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.siamaehwa.nimstudio.AppContainer
+import com.siamaehwa.nimstudio.core.ImageCatalog
 import com.siamaehwa.nimstudio.core.ImageGenParams
-import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
 import kotlinx.coroutines.CancellationException
@@ -64,18 +64,25 @@ class ImageViewModel(private val container: AppContainer) : ViewModel() {
     fun refreshModels() {
         if (_state.value.modelsLoading) return
         viewModelScope.launch {
-            _state.update { it.copy(modelsLoading = true) }
+            val catalog = ImageCatalog.merge(emptyList())
+            _state.update { s ->
+                s.copy(
+                    modelsLoading = true,
+                    imageModels = catalog,
+                    selectedModel = s.selectedModel
+                        ?.takeIf { id -> catalog.any { it.id == id } }
+                        ?: preferredImageModel(catalog),
+                )
+            }
             val models = try {
                 container.repository.models()
             } catch (c: CancellationException) {
                 throw c
             } catch (t: Exception) {
-                _state.update {
-                    it.copy(modelsLoading = false, error = NimErrors.friendlyFor(t))
-                }
+                _state.update { it.copy(modelsLoading = false) }
                 return@launch
             }
-            val imageModels = models.filter { ModelKinds.isLikelyImage(it.id) }
+            val imageModels = ImageCatalog.merge(models)
             _state.update { s ->
                 val current = s.selectedModel
                 val selected = if (current != null && imageModels.any { it.id == current }) {
@@ -104,7 +111,13 @@ class ImageViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun pickModel(id: String) {
-        _state.update { it.copy(selectedModel = id) }
+        val spec = ImageCatalog.spec(id)
+        _state.update {
+            it.copy(
+                selectedModel = id,
+                steps = spec?.defaultSteps?.coerceIn(4, 50) ?: it.steps,
+            )
+        }
     }
 
     fun setPrompt(value: String) {
@@ -156,7 +169,16 @@ class ImageViewModel(private val container: AppContainer) : ViewModel() {
             _state.update { it.copy(error = "프롬프트를 입력하세요.") }
             return
         }
-        val size = sizes[snapshot.sizeIndex]
+        val spec = ImageCatalog.spec(model)
+        var size = sizes[snapshot.sizeIndex]
+        val sizeNotice = if (spec?.squareOnly == true &&
+            (size.width != 1024 || size.height != 1024)
+        ) {
+            size = sizes[0]
+            "이 모델은 1024×1024만 지원해 정사각형으로 생성했습니다."
+        } else {
+            null
+        }
         val seed = snapshot.seed.toLongOrNull()
         val params = ImageGenParams(
             model = model,
@@ -164,7 +186,7 @@ class ImageViewModel(private val container: AppContainer) : ViewModel() {
             negativePrompt = snapshot.negative.trim(),
             width = size.width,
             height = size.height,
-            steps = snapshot.steps,
+            steps = spec?.fixedSteps ?: snapshot.steps,
             seed = seed,
         )
 
@@ -192,15 +214,18 @@ class ImageViewModel(private val container: AppContainer) : ViewModel() {
                         )
                     }.getOrNull()
                 }
+                val savedNotice = if (saved.isNotEmpty()) {
+                    "라이브러리에 자동 저장했습니다 (${saved.size}장)"
+                } else {
+                    null
+                }
                 _state.update {
                     it.copy(
                         generating = false,
                         results = images.map { image -> image.bytes },
-                        notice = if (saved.isNotEmpty()) {
-                            "라이브러리에 자동 저장했습니다 (${saved.size}장)"
-                        } else {
-                            null
-                        },
+                        notice = listOfNotNull(sizeNotice, savedNotice)
+                            .joinToString(" ")
+                            .ifBlank { null },
                     )
                 }
             } catch (c: CancellationException) {

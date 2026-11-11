@@ -3,6 +3,7 @@ package com.siamaehwa.nimstudio.ui.models
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.siamaehwa.nimstudio.AppContainer
+import com.siamaehwa.nimstudio.core.ImageCatalog
 import com.siamaehwa.nimstudio.core.ModelTestOutcome
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
@@ -50,7 +51,7 @@ class ModelsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null) }
             try {
-                val models = container.repository.models()
+                val models = ImageCatalog.merge(container.repository.models())
                 _state.update { it.copy(loading = false, models = models, loadedOnce = true) }
             } catch (c: CancellationException) {
                 throw c
@@ -59,6 +60,7 @@ class ModelsViewModel(private val container: AppContainer) : ViewModel() {
                     it.copy(
                         loading = false,
                         loadedOnce = true,
+                        models = ImageCatalog.merge(emptyList()),
                         error = NimErrors.friendlyFor(t),
                     )
                 }

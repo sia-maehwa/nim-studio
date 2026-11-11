@@ -65,6 +65,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.siamaehwa.nimstudio.NimStudioApp
+import com.siamaehwa.nimstudio.core.ImageCatalog
 import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
@@ -76,11 +77,12 @@ fun ImageScreen(onOpenSettings: () -> Unit) {
     val app = context.applicationContext as NimStudioApp
     val vm: ImageViewModel = viewModel { ImageViewModel(app.container) }
     val state by vm.state.collectAsStateWithLifecycle()
+    val selectedSpec = state.selectedModel?.let { ImageCatalog.spec(it) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "이미지 생성",
-            subtitle = state.selectedModel ?: "모델을 선택하세요",
+            subtitle = state.selectedModel?.let { ImageCatalog.label(it) } ?: "모델을 선택하세요",
         ) {
             ImageModelPicker(
                 models = state.imageModels,
@@ -122,17 +124,19 @@ fun ImageScreen(onOpenSettings: () -> Unit) {
 
             Spacer(Modifier.height(8.dp))
 
-            OutlinedTextField(
-                value = state.negative,
-                onValueChange = vm::setNegative,
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("네거티브 프롬프트 (선택)") },
-                placeholder = { Text("예: blurry, low quality, watermark") },
-                singleLine = true,
-                shape = RoundedCornerShape(14.dp),
-            )
+            if (selectedSpec == null || selectedSpec.supportsNegative) {
+                OutlinedTextField(
+                    value = state.negative,
+                    onValueChange = vm::setNegative,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("네거티브 프롬프트 (선택)") },
+                    placeholder = { Text("예: blurry, low quality, watermark") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                )
 
-            Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(14.dp))
+            }
 
             Text(
                 "크기",
@@ -158,16 +162,17 @@ fun ImageScreen(onOpenSettings: () -> Unit) {
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "스텝 ${state.steps}",
+                    "스텝 ${selectedSpec?.fixedSteps ?: state.steps}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.width(72.dp),
                 )
                 Slider(
-                    value = state.steps.toFloat(),
+                    value = (selectedSpec?.fixedSteps ?: state.steps).toFloat(),
                     onValueChange = { vm.setSteps(it.roundToInt()) },
                     valueRange = 4f..50f,
                     steps = 45,
+                    enabled = selectedSpec?.fixedSteps == null,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -397,7 +402,13 @@ private fun ImageModelPicker(
             }
             models.take(50).forEach { model ->
                 DropdownMenuItem(
-                    text = { Text(model.id, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    text = {
+                        Text(
+                            ImageCatalog.label(model.id),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     trailingIcon = {
                         if (model.id == selected) {
                             Icon(Icons.Filled.Check, contentDescription = null)
