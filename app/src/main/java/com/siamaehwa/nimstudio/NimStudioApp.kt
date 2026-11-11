@@ -11,6 +11,10 @@ import com.siamaehwa.nimstudio.core.NimStore
 import com.siamaehwa.nimstudio.core.db.AgentHistoryRepository
 import com.siamaehwa.nimstudio.core.db.AppDatabase
 import com.siamaehwa.nimstudio.core.plugin.PluginRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class NimStudioApp : Application() {
 
@@ -25,6 +29,11 @@ class NimStudioApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        container.appScope.launch {
+            container.store.keepAlive.collect { enabled ->
+                KeepAliveService.setPersistent(this@NimStudioApp, enabled)
+            }
+        }
         registerActivityLifecycleCallbacks(
             object : ActivityLifecycleCallbacks {
                 override fun onActivityStarted(activity: Activity) {
@@ -53,6 +62,7 @@ class NimStudioApp : Application() {
 
 class AppContainer(application: Application) {
     val appContext: Context = application.applicationContext
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val store = NimStore(application)
     val client = NimClient()
     val repository = NimRepository(store, client)

@@ -5,55 +5,20 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:rotation="-20">
-        <path
-            android:fillColor="#00000000"
-            android:pathData="M54,54m-31,0a31,8.5 0 1,0 62,0a31,8.5 0 1,0 -62,0"
-            android:strokeColor="#7376B900"
-            android:strokeWidth="2.2" />
-    </group>
-    <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:rotation="35">
-        <path
-            android:fillColor="#00000000"
-            android:pathData="M54,54m-27,0a27,6.5 0 1,0 54,0a27,6.5 0 1,0 -54,0"
-            android:strokeColor="#4076B900"
-            android:strokeWidth="1.6" />
-    </group>
-    <path android:pathData="M54,27A27,27 0 1,1 54,81A27,27 0 1,1 54,27Z">
+    <!-- 몽글몽글: 오브 뒤 소프트 글로우 -->
+    <path android:pathData="M54,54m-40,0a40,40 0 1,0 80,0a40,40 0 1,0 -80,0">
         <aapt:attr name="android:fillColor">
             <gradient
                 android:type="radial"
-                android:centerX="43"
-                android:centerY="41"
-                android:gradientRadius="45"
-                android:startColor="#E9FFB8"
-                android:centerColor="#6FBF00"
-                android:endColor="#123200" />
-        </aapt:attr>
-    </path>
-    <path
-        android:fillColor="#00000000"
-        android:pathData="M54,27A27,27 0 1,1 54,81A27,27 0 1,1 54,27Z"
-        android:strokeColor="#4DDFFFA8"
-        android:strokeWidth="1" />
-    <path android:pathData="M54,56m-12.5,0a12.5,12.5 0 1,0 25,0a12.5,12.5 0 1,0 -25,0">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="radial"
-                android:centerX="50"
-                android:centerY="52"
-                android:gradientRadius="16"
-                android:startColor="#E6F6FFD9"
-                android:centerColor="#73C6FF3B"
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="40"
+                android:startColor="#3DE9FFB8"
+                android:centerColor="#1476B900"
                 android:endColor="#0076B900" />
         </aapt:attr>
     </path>
+    <!-- 오비트 링 (뒤) -->
     <group
         android:pivotX="54"
         android:pivotY="54"
@@ -61,13 +26,13 @@
         <path
             android:fillColor="#00000000"
             android:pathData="M23,54A31,8.5 0 0,0 85,54"
-            android:strokeColor="#33A6E800"
+            android:strokeColor="#33E9FFB8"
             android:strokeLineCap="round"
-            android:strokeWidth="5" />
+            android:strokeWidth="5.5" />
         <path
             android:fillColor="#00000000"
             android:pathData="M23,54A31,8.5 0 0,0 85,54"
-            android:strokeColor="#E6A6E800"
+            android:strokeColor="#E6F4FFD9"
             android:strokeLineCap="round"
             android:strokeWidth="2.4" />
     </group>
@@ -82,6 +47,39 @@
             android:strokeLineCap="round"
             android:strokeWidth="1.8" />
     </group>
+    <!-- 메인 오브: 몽글몽글 그라데이션 -->
+    <path android:pathData="M54,27A27,27 0 1,1 54,81A27,27 0 1,1 54,27Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="43"
+                android:centerY="41"
+                android:gradientRadius="46"
+                android:startColor="#F2FFD6"
+                android:centerColor="#8FD400"
+                android:endColor="#0E2A00" />
+        </aapt:attr>
+    </path>
+    <!-- 오브 테두리 하이라이트 -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M54,27A27,27 0 1,1 54,81A27,27 0 1,1 54,27Z"
+        android:strokeColor="#4DE9FFB8"
+        android:strokeWidth="1" />
+    <!-- 몽글몽글: 오브 내부 소프트 블롭 -->
+    <path android:pathData="M54,56m-13,0a13,13 0 1,0 26,0a13,13 0 1,0 -26,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="50"
+                android:centerY="52"
+                android:gradientRadius="17"
+                android:startColor="#E6F6FFD9"
+                android:centerColor="#73C6FF3B"
+                android:endColor="#0076B900" />
+        </aapt:attr>
+    </path>
+    <!-- 몽글몽글: 좌상단 스페큘러 -->
     <group
         android:pivotX="44"
         android:pivotY="38"
@@ -93,7 +91,7 @@
                     android:centerX="44"
                     android:centerY="38"
                     android:gradientRadius="12"
-                    android:startColor="#8CFFFFFF"
+                    android:startColor="#99FFFFFF"
                     android:endColor="#00FFFFFF" />
             </aapt:attr>
         </path>
@@ -101,10 +99,22 @@
     <path
         android:fillColor="#D9FFFFFF"
         android:pathData="M40,33m-2,0a2,2 0 1,0 4,0a2,2 0 1,0 -4,0" />
+    <!-- 위성 도트 + 글로우 -->
+    <path android:pathData="M83.1,43.4m-5.5,0a5.5,5.5 0 1,0 11,0a5.5,5.5 0 1,0 -11,0">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="83.1"
+                android:centerY="43.4"
+                android:gradientRadius="5.5"
+                android:startColor="#8CE9FFB8"
+                android:endColor="#00E9FFB8" />
+        </aapt:attr>
+    </path>
     <path
         android:fillColor="#2EC6FF3B"
         android:pathData="M83.1,43.4m-4,0a4,4 0 1,0 8,0a4,4 0 1,0 -8,0" />
     <path
-        android:fillColor="#E9FFB8"
+        android:fillColor="#F2FFD6"
         android:pathData="M83.1,43.4m-1.8,0a1.8,1.8 0 1,0 3.6,0a1.8,1.8 0 1,0 -3.6,0" />
 </vector>

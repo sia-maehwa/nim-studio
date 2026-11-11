@@ -240,6 +240,34 @@ fun SettingsScreen() {
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    Text("백그라운드", style = MaterialTheme.typography.titleMedium)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "앱을 항상 메모리에 유지",
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                            Text(
+                                "켜면 포그라운드 서비스가 상시 실행되어 메모리 정리로 앱이 닫히지 않습니다. " +
+                                    "최소 알림이 표시되고 배터리를 조금 더 사용합니다.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = state.keepAlive,
+                            onCheckedChange = vm::setKeepAlive,
+                        )
+                    }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Text("서버 주소", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "기본값은 NVIDIA 호스팅 엔드포인트입니다. 자체 NIM 서버가 있으면 주소를 바꾸세요.",

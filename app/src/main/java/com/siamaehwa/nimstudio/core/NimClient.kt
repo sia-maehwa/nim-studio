@@ -28,6 +28,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 sealed interface NimStreamEvent {
     data class Content(val text: String) : NimStreamEvent
     data class Reasoning(val text: String) : NimStreamEvent
+    data class Notice(val text: String) : NimStreamEvent
     data class Finished(val reason: String?, val usage: TokenUsage? = null) : NimStreamEvent
 }
 
@@ -60,6 +61,7 @@ data class AgentToolCall(
 sealed interface AgentStreamEvent {
     data class Content(val text: String) : AgentStreamEvent
     data class Reasoning(val text: String) : AgentStreamEvent
+    data class Notice(val text: String) : AgentStreamEvent
     data class Done(
         val toolCalls: List<AgentToolCall>,
         val finishReason: String?,
@@ -139,25 +141,43 @@ class NimClient {
     ): Flow<NimStreamEvent> = flow {
         var emitted = false
         var lastError: Exception? = null
-        for (tokens in tokenLadder(maxTokens)) {
-            try {
-                streamChatOnce(
-                    apiKey, baseUrl, model, turns, temperature, tokens, reasoningEffort,
-                ) { event ->
-                    emitted = true
-                    emit(event)
+        var finished = false
+        var fellBack = false
+        for (effort in effortAttempts(reasoningEffort)) {
+            if (finished) break
+            for (tokens in tokenLadder(maxTokens)) {
+                try {
+                    streamChatOnce(
+                        apiKey, baseUrl, model, turns, temperature, tokens, effort,
+                    ) { event ->
+                        emitted = true
+                        emit(event)
+                    }
+                    finished = true
+                    lastError = null
+                    break
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: NimApiException) {
+                    if (e.status !in RETRYABLE_STATUSES || emitted) throw e
+                    lastError = e
+                    if (effort != null && !fellBack) {
+                        fellBack = true
+                        emit(
+                            NimStreamEvent.Notice(
+                                "이 모델이 추론 강도를 지원하지 않아 기본값으로 다시 시도합니다",
+                            ),
+                        )
+                        break
+                    }
                 }
-                lastError = null
-                break
-            } catch (c: CancellationException) {
-                throw c
-            } catch (e: NimApiException) {
-                if (e.status !in RETRYABLE_STATUSES || emitted) throw e
-                lastError = e
             }
         }
-        lastError?.let { throw it }
+        if (!finished) lastError?.let { throw it }
     }.flowOn(Dispatchers.IO)
+
+    private fun effortAttempts(effort: String?): List<String?> =
+        if (effort == null) listOf(null) else listOf(effort, null)
 
     private suspend fun streamChatOnce(
         apiKey: String,
@@ -565,24 +585,39 @@ class NimClient {
     ): Flow<AgentStreamEvent> = flow {
         var emitted = false
         var lastError: Exception? = null
-        for (tokens in tokenLadder(maxTokens)) {
-            try {
-                streamAgentOnce(
-                    apiKey, baseUrl, model, messages, tools, temperature, tokens, reasoningEffort,
-                ) { event ->
-                    emitted = true
-                    emit(event)
+        var finished = false
+        var fellBack = false
+        for (effort in effortAttempts(reasoningEffort)) {
+            if (finished) break
+            for (tokens in tokenLadder(maxTokens)) {
+                try {
+                    streamAgentOnce(
+                        apiKey, baseUrl, model, messages, tools, temperature, tokens, effort,
+                    ) { event ->
+                        emitted = true
+                        emit(event)
+                    }
+                    finished = true
+                    lastError = null
+                    break
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: NimApiException) {
+                    if (e.status !in RETRYABLE_STATUSES || emitted) throw e
+                    lastError = e
+                    if (effort != null && !fellBack) {
+                        fellBack = true
+                        emit(
+                            AgentStreamEvent.Notice(
+                                "이 모델이 추론 강도를 지원하지 않아 기본값으로 다시 시도합니다",
+                            ),
+                        )
+                        break
+                    }
                 }
-                lastError = null
-                break
-            } catch (c: CancellationException) {
-                throw c
-            } catch (e: NimApiException) {
-                if (e.status !in RETRYABLE_STATUSES || emitted) throw e
-                lastError = e
             }
         }
-        lastError?.let { throw it }
+        if (!finished) lastError?.let { throw it }
     }.flowOn(Dispatchers.IO)
 
     private suspend fun streamAgentOnce(

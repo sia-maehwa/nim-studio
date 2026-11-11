@@ -7,6 +7,7 @@ import com.siamaehwa.nimstudio.KeepAliveService
 import com.siamaehwa.nimstudio.core.AttachmentContent
 import com.siamaehwa.nimstudio.core.Attachments
 import com.siamaehwa.nimstudio.core.ChatTurn
+import com.siamaehwa.nimstudio.core.ClockInfo
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
@@ -416,6 +417,9 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                         when (event) {
                             is NimStreamEvent.Content -> channel.trySend(true to event.text)
                             is NimStreamEvent.Reasoning -> channel.trySend(false to event.text)
+                            is NimStreamEvent.Notice -> _state.update { s ->
+                                s.copy(notice = event.text)
+                            }
                             is NimStreamEvent.Finished -> {
                                 finishReason = event.reason
                                 usage = event.usage
@@ -675,7 +679,9 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     private fun buildTurns(systemPrompt: String, messages: List<ChatMsg>): List<ChatTurn> {
-        val turns = mutableListOf(ChatTurn("system", systemPrompt))
+        val turns = mutableListOf(
+            ChatTurn("system", "$systemPrompt\n\n오늘 날짜: ${ClockInfo.todayLabel()}"),
+        )
         messages
             .filter { it.role == "user" || it.role == "assistant" }
             .filter { it.content.isNotBlank() || it.parts != null }

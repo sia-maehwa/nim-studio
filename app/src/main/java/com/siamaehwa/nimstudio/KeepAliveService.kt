@@ -42,7 +42,7 @@ class KeepAliveService : Service() {
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_nim)
             .setContentTitle("NIM Studio")
-            .setContentText("응답 생성 중")
+            .setContentText(if (persistent) "백그라운드에서 대기 중" else "응답 생성 중")
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)
@@ -55,10 +55,31 @@ class KeepAliveService : Service() {
         private const val NOTIFICATION_ID = 42
 
         private var count = 0
+        private var persistent = false
 
         @Synchronized
         fun begin(context: Context) {
-            if (count++ > 0) return
+            count++
+            ensureStarted(context)
+        }
+
+        @Synchronized
+        fun end(context: Context) {
+            count = (count - 1).coerceAtLeast(0)
+            if (count == 0 && !persistent) stopNow(context)
+        }
+
+        @Synchronized
+        fun setPersistent(context: Context, enabled: Boolean) {
+            persistent = enabled
+            if (enabled) {
+                ensureStarted(context)
+            } else if (count == 0) {
+                stopNow(context)
+            }
+        }
+
+        private fun ensureStarted(context: Context) {
             runCatching {
                 ContextCompat.startForegroundService(
                     context,
@@ -67,10 +88,7 @@ class KeepAliveService : Service() {
             }
         }
 
-        @Synchronized
-        fun end(context: Context) {
-            count = (count - 1).coerceAtLeast(0)
-            if (count > 0) return
+        private fun stopNow(context: Context) {
             runCatching { context.stopService(Intent(context, KeepAliveService::class.java)) }
         }
     }

@@ -11,6 +11,7 @@ import com.siamaehwa.nimstudio.core.AgentToolCall
 import com.siamaehwa.nimstudio.core.AttachmentContent
 import com.siamaehwa.nimstudio.core.Attachments
 import com.siamaehwa.nimstudio.core.ChatMessage
+import com.siamaehwa.nimstudio.core.ClockInfo
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
@@ -551,6 +552,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                     refreshLive(now, force = false)
                                 }
 
+                                is AgentStreamEvent.Notice -> addNotice(event.text)
+
                                 is AgentStreamEvent.Done -> {
                                     calls = event.toolCalls
                                     finishReason = event.finishReason
@@ -857,6 +860,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
     private fun systemPrompt(workspace: Workspace, rootListing: String): String = buildString {
         appendLine("당신은 NIM Studio의 코딩 에이전트입니다. Android 기기의 SAF로 허용된 프로젝트 폴더에서 파일을 읽고 수정합니다.")
+        appendLine("오늘 날짜: ${ClockInfo.todayLabel()}")
         appendLine("작업 폴더: ${workspace.name}")
         if (rootListing.isNotBlank()) appendLine("최상위 항목: $rootListing")
         appendLine("규칙:")

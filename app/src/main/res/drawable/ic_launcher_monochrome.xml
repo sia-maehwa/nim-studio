@@ -4,6 +4,7 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- 모노크롬: 단색 실루엣만 사용 -->
     <path
         android:fillColor="#FFFFFFFF"
         android:pathData="M54,27A27,27 0 1,1 54,81A27,27 0 1,1 54,27Z" />
@@ -29,4 +30,7 @@
             android:strokeLineCap="round"
             android:strokeWidth="2" />
     </group>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M83.1,43.4m-3.4,0a3.4,3.4 0 1,0 6.8,0a3.4,3.4 0 1,0 -6.8,0" />
 </vector>
