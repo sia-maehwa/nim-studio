@@ -6,6 +6,7 @@ import com.siamaehwa.nimstudio.core.LibraryRepository
 import com.siamaehwa.nimstudio.core.NimClient
 import com.siamaehwa.nimstudio.core.NimRepository
 import com.siamaehwa.nimstudio.core.NimStore
+import com.siamaehwa.nimstudio.core.db.AgentHistoryRepository
 import com.siamaehwa.nimstudio.core.db.AppDatabase
 import com.siamaehwa.nimstudio.core.plugin.PluginRepository
 
@@ -28,5 +29,6 @@ class AppContainer(application: Application) {
     val database = AppDatabase.build(application)
     val conversations = database.conversationDao()
     val library = LibraryRepository(application, database.libraryDao())
+    val agentHistory = AgentHistoryRepository(database.agentHistoryDao())
     val plugins = PluginRepository(application)
 }

@@ -47,3 +47,34 @@ data class LibraryItemEntity(
     val source: String,
     val createdAt: Long,
 )
+
+@Entity(tableName = "agent_sessions")
+data class AgentSessionEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val model: String,
+    val workspaceName: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+)
+
+@Entity(
+    tableName = "agent_messages",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["sessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index("sessionId")],
+)
+data class AgentMessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sessionId: Long,
+    val kind: String,
+    val text: String,
+    val toolName: String? = null,
+    val createdAt: Long,
+)

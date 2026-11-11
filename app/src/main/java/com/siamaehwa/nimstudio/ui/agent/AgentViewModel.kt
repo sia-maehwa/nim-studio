@@ -17,6 +17,7 @@ import com.siamaehwa.nimstudio.core.agent.AgentTools
 import com.siamaehwa.nimstudio.core.agent.ToolOutcome
 import com.siamaehwa.nimstudio.core.agent.UndoInfo
 import com.siamaehwa.nimstudio.core.agent.Workspace
+import com.siamaehwa.nimstudio.core.db.AgentSessionSummary
 import com.siamaehwa.nimstudio.core.plugin.PluginManifest
 import com.siamaehwa.nimstudio.core.plugin.PluginTool
 import kotlinx.coroutines.CancellationException
@@ -57,6 +58,11 @@ data class AgentMsg(
     val undone: Boolean = false,
 )
 
+data class AgentHistoryView(
+    val session: AgentSessionSummary,
+    val messages: List<AgentMsg>,
+)
+
 data class AgentUiState(
     val hasKey: Boolean? = null,
     val workspaceName: String? = null,
@@ -77,6 +83,8 @@ data class AgentUiState(
     val todos: List<AgentTodo> = emptyList(),
     val pendingQuestion: AgentQuestion? = null,
     val pluginToolCount: Int = 0,
+    val history: List<AgentSessionSummary> = emptyList(),
+    val historyView: AgentHistoryView? = null,
     val banner: String? = null,
 ) {
     companion object {
@@ -99,6 +107,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     private var job: Job? = null
     private var currentPlugins: List<PluginManifest> = emptyList()
     private var questionDeferred: CompletableDeferred<String>? = null
+    private var sessionId: Long? = null
 
     init {
         viewModelScope.launch {
@@ -125,6 +134,11 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         }
         viewModelScope.launch {
             container.plugins.reload()
+        }
+        viewModelScope.launch {
+            container.agentHistory.observeSessions().collect { list ->
+                _state.update { it.copy(history = list) }
+            }
         }
         viewModelScope.launch {
             container.plugins.plugins.collect { list ->
@@ -200,6 +214,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 tools = AgentTools(ws)
                 apiHistory.clear()
                 undoData.clear()
+                sessionId = null
                 container.store.saveAgentTreeUri(uri.toString())
                 _state.update {
                     it.copy(
@@ -240,6 +255,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         if (_state.value.running) return
         apiHistory.clear()
         undoData.clear()
+        sessionId = null
         _state.update {
             it.copy(
                 messages = emptyList(),
@@ -265,6 +281,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         questionDeferred = null
         _state.update { it.copy(pendingQuestion = null) }
         addMessage(AgentMsg(id = nextId++, kind = "user", text = clean))
+        viewModelScope.launch { persist("user", clean) }
         deferred.complete(clean)
     }
 
@@ -315,6 +332,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(running = true, step = 0, banner = null) }
 
         job = viewModelScope.launch {
+            ensureSession(prompt, model, ws.name)
+            persist("user", prompt)
             val coreToolNames = AgentTools.specs.map { it.function.name }.toSet()
             val pluginSpecs = container.plugins.toolSpecs(currentPlugins)
                 .filter { it.function.name !in coreToolNames }
@@ -414,6 +433,9 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     updateMessage(assistantId) {
                         it.copy(text = assistantText, streaming = false)
                     }
+                    if (assistantText.isNotBlank()) {
+                        persist("assistant", assistantText)
+                    }
                     apiHistory.add(
                         ChatMessage(
                             role = "assistant",
@@ -473,6 +495,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 canUndo = outcome.undo != null,
                             )
                         }
+                        persist("tool", outcome.summary + "\n" + outcome.detail, call.name)
                         outcome.undo?.let { undoData[toolId] = it }
                         apiHistory.add(
                             ChatMessage(
@@ -485,24 +508,27 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     }
                 }
                 if (!completed) {
-                    addNotice(
-                        "최대 단계(${AgentUiState.MAX_STEPS})에 도달했습니다. " +
-                            "계속하려면 다시 요청하세요.",
-                    )
+                    val notice = "최대 단계(${AgentUiState.MAX_STEPS})에 도달했습니다. " +
+                        "계속하려면 다시 요청하세요."
+                    addNotice(notice)
+                    persist("notice", notice)
                 }
             } catch (c: CancellationException) {
                 respondMissing(activeCalls, responded)
                 addNotice("작업을 중지했습니다.")
+                persist("notice", "작업을 중지했습니다.")
                 throw c
             } catch (t: Exception) {
                 respondMissing(activeCalls, responded)
+                val message = NimErrors.friendlyFor(t)
                 addMessage(
                     AgentMsg(
                         id = nextId++,
                         kind = "error",
-                        text = NimErrors.friendlyFor(t),
+                        text = message,
                     ),
                 )
+                persist("error", message)
             } finally {
                 questionDeferred = null
                 _state.update { it.copy(running = false, pendingQuestion = null) }
@@ -622,6 +648,61 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         appendLine("- 요청이 모호하면 한 번만 짧게 되물어보세요.")
         appendLine("- 답변은 한국어로 간결하게. 작업 후 바꾼 파일을 요약하세요.")
         appendLine("- .git, build, node_modules 등 보호된 폴더는 수정할 수 없습니다.")
+    }
+
+    fun openHistory(id: Long) {
+        viewModelScope.launch {
+            val session = _state.value.history.firstOrNull { it.id == id } ?: return@launch
+            val messages = runCatching { container.agentHistory.messages(id) }
+                .getOrDefault(emptyList())
+                .map { entity ->
+                    AgentMsg(
+                        id = entity.id,
+                        kind = entity.kind,
+                        text = entity.text,
+                        toolName = entity.toolName,
+                        toolStatus = if (entity.kind == "tool") "ok" else null,
+                    )
+                }
+            _state.update { it.copy(historyView = AgentHistoryView(session, messages)) }
+        }
+    }
+
+    fun closeHistoryView() {
+        _state.update { it.copy(historyView = null) }
+    }
+
+    fun deleteHistory(id: Long) {
+        viewModelScope.launch {
+            runCatching { container.agentHistory.delete(id) }
+            if (_state.value.historyView?.session?.id == id) {
+                _state.update { it.copy(historyView = null) }
+            }
+        }
+    }
+
+    private suspend fun ensureSession(title: String, model: String, workspaceName: String) {
+        if (sessionId != null) return
+        try {
+            sessionId = container.agentHistory.createSession(
+                title = title.replace('\n', ' ').take(80),
+                model = model,
+                workspaceName = workspaceName,
+            )
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Exception) {
+        }
+    }
+
+    private suspend fun persist(kind: String, text: String, toolName: String? = null) {
+        val id = sessionId ?: return
+        try {
+            container.agentHistory.append(id, kind, text, toolName)
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Exception) {
+        }
     }
 
     private fun addMessage(msg: AgentMsg) {

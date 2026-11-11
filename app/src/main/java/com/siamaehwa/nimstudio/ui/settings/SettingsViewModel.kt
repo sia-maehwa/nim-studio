@@ -29,6 +29,7 @@ data class SettingsUiState(
     val result: CheckResult? = null,
     val plugins: List<PluginManifest> = emptyList(),
     val pluginMessage: String? = null,
+    val darkMode: Boolean? = null,
 )
 
 class SettingsViewModel(private val container: AppContainer) : ViewModel() {
@@ -44,6 +45,11 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             }
         }
         viewModelScope.launch {
+            container.store.darkMode.collect { enabled ->
+                _state.update { it.copy(darkMode = enabled) }
+            }
+        }
+        viewModelScope.launch {
             val key = container.store.apiKey.first()
             val base = container.store.baseUrl.first()
             _state.update {
@@ -55,6 +61,10 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
         }
+    }
+
+    fun setDarkMode(enabled: Boolean?) {
+        viewModelScope.launch { container.store.saveDarkMode(enabled) }
     }
 
     fun onKeyInput(value: String) = _state.update { it.copy(keyInput = value) }

@@ -50,3 +50,29 @@ interface LibraryDao {
     @Query("DELETE FROM library_items WHERE id = :id")
     suspend fun delete(id: Long)
 }
+
+@Dao
+interface AgentHistoryDao {
+
+    @Query(
+        "SELECT s.id, s.title, s.model, s.workspaceName, s.updatedAt, " +
+            "(SELECT COUNT(*) FROM agent_messages m WHERE m.sessionId = s.id) AS messageCount " +
+            "FROM agent_sessions s ORDER BY s.updatedAt DESC",
+    )
+    fun observeSessions(): Flow<List<AgentSessionSummary>>
+
+    @Query("SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY id ASC")
+    suspend fun messages(sessionId: Long): List<AgentMessageEntity>
+
+    @Insert
+    suspend fun insertSession(session: AgentSessionEntity): Long
+
+    @Insert
+    suspend fun insertMessage(message: AgentMessageEntity): Long
+
+    @Query("UPDATE agent_sessions SET updatedAt = :updatedAt WHERE id = :id")
+    suspend fun touch(id: Long, updatedAt: Long)
+
+    @Query("DELETE FROM agent_sessions WHERE id = :id")
+    suspend fun delete(id: Long)
+}

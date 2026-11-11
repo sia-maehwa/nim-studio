@@ -25,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -199,6 +200,37 @@ fun SettingsScreen() {
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("화면", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "앱 테마를 시스템 설정에 맞추거나 라이트/다크로 고정합니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = state.darkMode == null,
+                            onClick = { vm.setDarkMode(null) },
+                            label = { Text("시스템") },
+                        )
+                        FilterChip(
+                            selected = state.darkMode == false,
+                            onClick = { vm.setDarkMode(false) },
+                            label = { Text("라이트") },
+                        )
+                        FilterChip(
+                            selected = state.darkMode == true,
+                            onClick = { vm.setDarkMode(true) },
+                            label = { Text("다크") },
+                        )
                     }
                 }
             }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,12 +39,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Circle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RadioButtonChecked
@@ -61,6 +64,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -87,9 +91,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.siamaehwa.nimstudio.NimStudioApp
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.db.AgentSessionSummary
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
 import com.siamaehwa.nimstudio.ui.common.RenderedMarkdown
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun AgentScreen(onOpenSettings: () -> Unit) {
@@ -98,6 +106,7 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
     val vm: AgentViewModel = viewModel { AgentViewModel(app.container) }
     val state by vm.state.collectAsStateWithLifecycle()
     var draft by rememberSaveable { mutableStateOf("") }
+    var showHistory by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     val folderPicker = rememberLauncherForActivityResult(
@@ -120,6 +129,9 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                 }
             },
         ) {
+            IconButton(onClick = { showHistory = true }) {
+                Icon(Icons.Filled.History, contentDescription = "에이전트 기록")
+            }
             IconButton(onClick = { folderPicker.launch(null) }) {
                 Icon(Icons.Filled.FolderOpen, contentDescription = "작업 폴더 선택")
             }
@@ -246,6 +258,171 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (showHistory) {
+        AgentHistorySheet(
+            sessions = state.history,
+            view = state.historyView,
+            onOpen = vm::openHistory,
+            onCloseView = vm::closeHistoryView,
+            onDelete = vm::deleteHistory,
+            onDismiss = {
+                showHistory = false
+                vm.closeHistoryView()
+            },
+        )
+    }
+}
+
+private val historyTimeFormat: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("MM.dd HH:mm")
+
+private fun formatHistoryTime(epochMillis: Long): String =
+    Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).format(historyTimeFormat)
+
+@Composable
+private fun AgentHistorySheet(
+    sessions: List<AgentSessionSummary>,
+    view: AgentHistoryView?,
+    onOpen: (Long) -> Unit,
+    onCloseView: () -> Unit,
+    onDelete: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (view != null) {
+                    TextButton(onClick = onCloseView) { Text("뒤로") }
+                }
+                Text(
+                    view?.session?.title ?: "에이전트 기록",
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismiss) { Text("닫기") }
+            }
+
+            if (view != null) {
+                Text(
+                    "${view.session.model} · ${view.session.workspaceName} · " +
+                        formatHistoryTime(view.session.updatedAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                HorizontalDivider()
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(items = view.messages, key = { it.id }) { msg ->
+                        HistoryMessageItem(msg)
+                    }
+                }
+            } else if (sessions.isEmpty()) {
+                Text(
+                    "저장된 기록이 없습니다. 에이전트에게 요청하면 자동으로 기록됩니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 16.dp),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 460.dp),
+                ) {
+                    items(items = sessions, key = { it.id }) { session ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpen(session.id) }
+                                .padding(vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    session.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "${session.model} · ${session.workspaceName} · " +
+                                        "${formatHistoryTime(session.updatedAt)} · " +
+                                        "${session.messageCount}개 메시지",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            IconButton(onClick = { onDelete(session.id) }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "기록 삭제")
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryMessageItem(msg: AgentMsg) {
+    when (msg.kind) {
+        "user" -> Column {
+            Text(
+                "나",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            SelectionContainer {
+                Text(msg.text, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+        "assistant" -> RenderedMarkdown(msg.text)
+
+        "tool" -> Column {
+            Text(
+                "도구 · ${msg.toolName ?: ""}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                msg.text,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        "error" -> Text(
+            msg.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+
+        else -> Text(
+            msg.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
