@@ -15,13 +15,19 @@ class AgentHistoryRepository(private val dao: AgentHistoryDao) {
 
     fun observeSessions(): Flow<List<AgentSessionSummary>> = dao.observeSessions()
 
-    suspend fun createSession(title: String, model: String, workspaceName: String): Long {
+    suspend fun createSession(
+        title: String,
+        model: String,
+        workspaceName: String,
+        workspaceUri: String? = null,
+    ): Long {
         val now = System.currentTimeMillis()
         return dao.insertSession(
             AgentSessionEntity(
                 title = title,
                 model = model,
                 workspaceName = workspaceName,
+                workspaceUri = workspaceUri,
                 createdAt = now,
                 updatedAt = now,
             ),
@@ -43,6 +49,12 @@ class AgentHistoryRepository(private val dao: AgentHistoryDao) {
     }
 
     suspend fun messages(sessionId: Long): List<AgentMessageEntity> = dao.messages(sessionId)
+
+    suspend fun session(sessionId: Long): AgentSessionEntity? = dao.session(sessionId)
+
+    suspend fun saveApiHistory(sessionId: Long, apiJson: String) {
+        dao.updateApiHistory(sessionId, apiJson, System.currentTimeMillis())
+    }
 
     suspend fun delete(sessionId: Long) = dao.delete(sessionId)
 

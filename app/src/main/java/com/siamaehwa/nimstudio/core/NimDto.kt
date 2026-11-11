@@ -2,7 +2,10 @@ package com.siamaehwa.nimstudio.core
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 @Serializable
 data class NimModel(
@@ -20,10 +23,28 @@ data class ModelsResponse(
 @Serializable
 data class ChatMessage(
     val role: String,
-    val content: String? = null,
+    val content: JsonElement? = null,
     @SerialName("tool_calls") val toolCalls: List<ToolCall>? = null,
     @SerialName("tool_call_id") val toolCallId: String? = null,
 )
+
+fun textContent(text: String?): JsonElement? = text?.let(::JsonPrimitive)
+
+fun JsonElement?.asMessageText(): String = when (this) {
+    null -> ""
+    is JsonPrimitive -> content
+    is JsonArray -> joinToString("") { element ->
+        val obj = element as? JsonObject ?: return@joinToString ""
+        when (obj["type"].primitiveText()) {
+            "text" -> obj["text"].primitiveText()
+            else -> ""
+        }
+    }
+    else -> ""
+}
+
+private fun JsonElement?.primitiveText(): String =
+    (this as? JsonPrimitive)?.content.orEmpty()
 
 @Serializable
 data class ToolCall(
@@ -61,6 +82,7 @@ data class ChatRequest(
     val stream: Boolean = true,
     val tools: List<ToolSpec>? = null,
     @SerialName("tool_choice") val toolChoice: String? = null,
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     @SerialName("stream_options") val streamOptions: StreamOptions? = null,
 )
 

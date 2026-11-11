@@ -54,6 +54,8 @@ data class AgentSessionEntity(
     val title: String,
     val model: String,
     val workspaceName: String,
+    val workspaceUri: String? = null,
+    val apiJson: String? = null,
     val createdAt: Long,
     val updatedAt: Long,
 )

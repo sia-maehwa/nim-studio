@@ -19,6 +19,8 @@ class NimStore(private val context: Context) {
         private val KEY_AGENT_TREE = stringPreferencesKey("agent_tree_uri")
         private val KEY_AGENT_MODEL = stringPreferencesKey("agent_model")
         private val KEY_DARK_MODE = stringPreferencesKey("dark_mode")
+        private val KEY_CHAT_REASONING = stringPreferencesKey("chat_reasoning")
+        private val KEY_AGENT_REASONING = stringPreferencesKey("agent_reasoning")
     }
 
     val apiKey: Flow<String?> = context.nimDataStore.data.map { prefs ->
@@ -67,6 +69,34 @@ class NimStore(private val context: Context) {
 
     suspend fun saveAgentModel(id: String) {
         context.nimDataStore.edit { prefs -> prefs[KEY_AGENT_MODEL] = id }
+    }
+
+    val chatReasoning: Flow<ReasoningEffort> = context.nimDataStore.data.map { prefs ->
+        ReasoningEffort.fromId(prefs[KEY_CHAT_REASONING])
+    }
+
+    val agentReasoning: Flow<ReasoningEffort> = context.nimDataStore.data.map { prefs ->
+        ReasoningEffort.fromId(prefs[KEY_AGENT_REASONING])
+    }
+
+    suspend fun saveChatReasoning(effort: ReasoningEffort) {
+        context.nimDataStore.edit { prefs ->
+            if (effort.id == null) {
+                prefs.remove(KEY_CHAT_REASONING)
+            } else {
+                prefs[KEY_CHAT_REASONING] = effort.id
+            }
+        }
+    }
+
+    suspend fun saveAgentReasoning(effort: ReasoningEffort) {
+        context.nimDataStore.edit { prefs ->
+            if (effort.id == null) {
+                prefs.remove(KEY_AGENT_REASONING)
+            } else {
+                prefs[KEY_AGENT_REASONING] = effort.id
+            }
+        }
     }
 
     /** null이면 시스템 설정을 따릅니다. */

@@ -64,11 +64,17 @@ interface AgentHistoryDao {
     @Query("SELECT * FROM agent_messages WHERE sessionId = :sessionId ORDER BY id ASC")
     suspend fun messages(sessionId: Long): List<AgentMessageEntity>
 
+    @Query("SELECT * FROM agent_sessions WHERE id = :id")
+    suspend fun session(id: Long): AgentSessionEntity?
+
     @Insert
     suspend fun insertSession(session: AgentSessionEntity): Long
 
     @Insert
     suspend fun insertMessage(message: AgentMessageEntity): Long
+
+    @Query("UPDATE agent_sessions SET apiJson = :apiJson, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateApiHistory(id: Long, apiJson: String, updatedAt: Long)
 
     @Query("UPDATE agent_sessions SET updatedAt = :updatedAt WHERE id = :id")
     suspend fun touch(id: Long, updatedAt: Long)

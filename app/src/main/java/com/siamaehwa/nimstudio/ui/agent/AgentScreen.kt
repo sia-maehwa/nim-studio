@@ -33,6 +33,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -90,9 +91,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.siamaehwa.nimstudio.NimStudioApp
+import com.siamaehwa.nimstudio.core.AttachmentContent
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.ReasoningEffort
 import com.siamaehwa.nimstudio.core.db.AgentSessionSummary
+import com.siamaehwa.nimstudio.ui.common.AttachmentChips
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
+import com.siamaehwa.nimstudio.ui.common.ReasoningPicker
 import com.siamaehwa.nimstudio.ui.common.RenderedMarkdown
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
 import java.time.Instant
@@ -113,6 +118,12 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
         contract = ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
         if (uri != null) vm.openWorkspace(uri)
+    }
+
+    val attachPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) vm.addAttachments(uris)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -236,6 +247,18 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                     TodoPanel(todos = state.todos)
                 }
 
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ReasoningPicker(
+                        selected = state.reasoning,
+                        onSelect = vm::setReasoning,
+                    )
+                }
+
                 val question = state.pendingQuestion
                 if (question != null) {
                     QuestionCard(
@@ -248,6 +271,10 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                         draft = draft,
                         onDraftChange = { draft = it },
                         running = state.running,
+                        attachments = state.attachments,
+                        attachmentsLoading = state.attachmentsLoading,
+                        onAttach = { attachPicker.launch(arrayOf("*/*")) },
+                        onRemoveAttachment = vm::removeAttachment,
                         onSend = {
                             val text = draft
                             draft = ""
@@ -267,6 +294,10 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
             onOpen = vm::openHistory,
             onCloseView = vm::closeHistoryView,
             onDelete = vm::deleteHistory,
+            onResume = { id ->
+                showHistory = false
+                vm.resumeSession(id)
+            },
             onDismiss = {
                 showHistory = false
                 vm.closeHistoryView()
@@ -288,6 +319,7 @@ private fun AgentHistorySheet(
     onOpen: (Long) -> Unit,
     onCloseView: () -> Unit,
     onDelete: (Long) -> Unit,
+    onResume: (Long) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -321,6 +353,12 @@ private fun AgentHistorySheet(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Button(
+                    onClick = { onResume(view.session.id) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("이 세션 이어서 작업")
+                }
                 HorizontalDivider()
                 LazyColumn(
                     modifier = Modifier
@@ -835,47 +873,68 @@ private fun AgentInputBar(
     draft: String,
     onDraftChange: (String) -> Unit,
     running: Boolean,
+    attachments: List<AttachmentContent>,
+    attachmentsLoading: Boolean,
+    onAttach: () -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .imePadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom,
+            .imePadding(),
     ) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = onDraftChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("예: 채팅 화면에 다크 모드 토글 추가해줘") },
-            maxLines = 5,
-            shape = RoundedCornerShape(18.dp),
-            trailingIcon = {
-                IconButton(onClick = {
-                    keyboard?.hide()
-                    focus.clearFocus()
-                }) {
-                    Icon(
-                        Icons.Filled.KeyboardHide,
-                        contentDescription = "키보드 내리기",
-                    )
-                }
-            },
+        AttachmentChips(
+            attachments = attachments,
+            loading = attachmentsLoading,
+            onRemove = onRemoveAttachment,
         )
-        Spacer(Modifier.width(8.dp))
-        FilledIconButton(
-            onClick = { if (running) onStop() else onSend() },
-            enabled = running || draft.isNotBlank(),
-            modifier = Modifier.size(48.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Icon(
-                imageVector = if (running) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                contentDescription = if (running) "중지" else "전송",
+            IconButton(onClick = onAttach) {
+                Icon(Icons.Filled.AttachFile, contentDescription = "파일 첨부")
+            }
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("예: 채팅 화면에 다크 모드 토글 추가해줘") },
+                maxLines = 5,
+                shape = RoundedCornerShape(18.dp),
+                trailingIcon = {
+                    IconButton(onClick = {
+                        keyboard?.hide()
+                        focus.clearFocus()
+                    }) {
+                        Icon(
+                            Icons.Filled.KeyboardHide,
+                            contentDescription = "키보드 내리기",
+                        )
+                    }
+                },
             )
+            Spacer(Modifier.width(8.dp))
+            FilledIconButton(
+                onClick = { if (running) onStop() else onSend() },
+                enabled = running || draft.isNotBlank() || attachments.isNotEmpty(),
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    imageVector = if (running) {
+                        Icons.Filled.Stop
+                    } else {
+                        Icons.AutoMirrored.Filled.Send
+                    },
+                    contentDescription = if (running) "중지" else "전송",
+                )
+            }
         }
     }
 }

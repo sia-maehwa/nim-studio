@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AgentSessionEntity::class,
         AgentMessageEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -52,9 +52,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `agent_sessions` ADD COLUMN `workspaceUri` TEXT")
+                db.execSQL("ALTER TABLE `agent_sessions` ADD COLUMN `apiJson` TEXT")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "nim-studio.db")
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
     }
 }

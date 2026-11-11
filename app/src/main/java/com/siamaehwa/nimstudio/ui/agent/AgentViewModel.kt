@@ -4,12 +4,16 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.siamaehwa.nimstudio.AppContainer
+import com.siamaehwa.nimstudio.KeepAliveService
 import com.siamaehwa.nimstudio.core.AgentStreamEvent
 import com.siamaehwa.nimstudio.core.AgentToolCall
+import com.siamaehwa.nimstudio.core.AttachmentContent
+import com.siamaehwa.nimstudio.core.Attachments
 import com.siamaehwa.nimstudio.core.ChatMessage
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.ReasoningEffort
 import com.siamaehwa.nimstudio.core.TokenEstimator
 import com.siamaehwa.nimstudio.core.ToolCall
 import com.siamaehwa.nimstudio.core.ToolCallFunction
@@ -17,24 +21,34 @@ import com.siamaehwa.nimstudio.core.agent.AgentTools
 import com.siamaehwa.nimstudio.core.agent.ToolOutcome
 import com.siamaehwa.nimstudio.core.agent.UndoInfo
 import com.siamaehwa.nimstudio.core.agent.Workspace
+import com.siamaehwa.nimstudio.core.asMessageText
 import com.siamaehwa.nimstudio.core.db.AgentSessionSummary
 import com.siamaehwa.nimstudio.core.plugin.PluginManifest
 import com.siamaehwa.nimstudio.core.plugin.PluginTool
+import com.siamaehwa.nimstudio.core.textContent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 data class AgentTodo(
     val id: String,
@@ -73,7 +87,10 @@ data class AgentUiState(
     val models: List<NimModel> = emptyList(),
     val modelsLoading: Boolean = false,
     val selectedModel: String? = null,
+    val reasoning: ReasoningEffort = ReasoningEffort.Default,
     val messages: List<AgentMsg> = emptyList(),
+    val attachments: List<AttachmentContent> = emptyList(),
+    val attachmentsLoading: Boolean = false,
     val running: Boolean = false,
     val step: Int = 0,
     val maxSteps: Int = MAX_STEPS,
@@ -108,6 +125,11 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     private var currentPlugins: List<PluginManifest> = emptyList()
     private var questionDeferred: CompletableDeferred<String>? = null
     private var sessionId: Long? = null
+    private val historyJson = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
 
     init {
         viewModelScope.launch {
@@ -124,6 +146,11 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 if (!saved.isNullOrBlank() && _state.value.selectedModel == null) {
                     _state.update { it.copy(selectedModel = saved) }
                 }
+            }
+        }
+        viewModelScope.launch {
+            container.store.agentReasoning.collect { effort ->
+                _state.update { it.copy(reasoning = effort) }
             }
         }
         viewModelScope.launch {
@@ -200,6 +227,44 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { container.store.saveAgentModel(id) }
     }
 
+    fun setReasoning(effort: ReasoningEffort) {
+        _state.update { it.copy(reasoning = effort) }
+        viewModelScope.launch { container.store.saveAgentReasoning(effort) }
+    }
+
+    fun addAttachments(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val snapshot = _state.value
+        val room = Attachments.MAX_FILES - snapshot.attachments.size
+        if (room <= 0) {
+            banner("첨부는 최대 ${Attachments.MAX_FILES}개까지 가능합니다")
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(attachmentsLoading = true) }
+            val loaded = mutableListOf<AttachmentContent>()
+            var error: String? = null
+            for (uri in uris.take(room)) {
+                Attachments.load(container.appContext, uri)
+                    .onSuccess { loaded.add(it) }
+                    .onFailure { error = it.message }
+            }
+            _state.update { s ->
+                s.copy(
+                    attachments = (s.attachments + loaded).take(Attachments.MAX_FILES),
+                    attachmentsLoading = false,
+                    banner = error ?: s.banner,
+                )
+            }
+        }
+    }
+
+    fun removeAttachment(index: Int) {
+        _state.update { s ->
+            s.copy(attachments = s.attachments.filterIndexed { i, _ -> i != index })
+        }
+    }
+
     fun dismissBanner() {
         _state.update { it.copy(banner = null) }
     }
@@ -224,6 +289,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         workspaceTruncated = ws.truncated,
                         fileCount = ws.fileCount,
                         messages = emptyList(),
+                        attachments = emptyList(),
+                        attachmentsLoading = false,
                         todos = emptyList(),
                         tokens = 0,
                         tokensExact = false,
@@ -259,6 +326,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         _state.update {
             it.copy(
                 messages = emptyList(),
+                attachments = emptyList(),
+                attachmentsLoading = false,
                 todos = emptyList(),
                 pendingQuestion = null,
                 tokens = 0,
@@ -310,7 +379,8 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     fun send(text: String) {
         val prompt = text.trim()
         val snapshot = _state.value
-        if (prompt.isEmpty() || snapshot.running) return
+        val attachments = snapshot.attachments
+        if ((prompt.isEmpty() && attachments.isEmpty()) || snapshot.running) return
         if (snapshot.hasKey != true) {
             banner("API 키를 먼저 설정하세요.")
             return
@@ -327,13 +397,31 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
 
-        addMessage(AgentMsg(id = nextId++, kind = "user", text = prompt))
-        apiHistory.add(ChatMessage(role = "user", content = prompt))
-        _state.update { it.copy(running = true, step = 0, banner = null) }
+        val displayText = prompt.ifBlank {
+            attachments.joinToString(", ") { it.name }
+        }
+        addMessage(AgentMsg(id = nextId++, kind = "user", text = displayText))
+        apiHistory.add(
+            ChatMessage(
+                role = "user",
+                content = Attachments.userContent(prompt, attachments),
+            ),
+        )
+        _state.update {
+            it.copy(
+                running = true,
+                step = 0,
+                attachments = emptyList(),
+                attachmentsLoading = false,
+                banner = null,
+            )
+        }
+        val reasoning = snapshot.reasoning.id
 
         job = viewModelScope.launch {
-            ensureSession(prompt, model, ws.name)
-            persist("user", prompt)
+            ensureSession(displayText, model, ws.name)
+            persist("user", displayText)
+            KeepAliveService.begin(container.appContext)
             val coreToolNames = AgentTools.specs.map { it.function.name }.toSet()
             val pluginSpecs = container.plugins.toolSpecs(currentPlugins)
                 .filter { it.function.name !in coreToolNames }
@@ -350,10 +438,13 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 for (step in 1..AgentUiState.MAX_STEPS) {
                     _state.update { it.copy(step = step) }
                     val messages = listOf(
-                        ChatMessage(role = "system", content = systemPrompt(ws, rootListing)),
+                        ChatMessage(
+                            role = "system",
+                            content = textContent(systemPrompt(ws, rootListing)),
+                        ),
                     ) + apiHistory
                     val promptEstimate = TokenEstimator.estimate(
-                        messages.joinToString("\n") { it.content.orEmpty() },
+                        messages.joinToString("\n") { it.content.asMessageText() },
                     )
                     _state.update {
                         it.copy(tokens = promptEstimate, tokensExact = false, tokensPerSecond = 0)
@@ -369,7 +460,12 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     var lastUi = 0L
                     var firstTokenAt = 0L
 
-                    container.repository.streamAgent(model, messages, specs)
+                    container.repository.streamAgent(
+                        model,
+                        messages,
+                        specs,
+                        reasoningEffort = reasoning,
+                    )
                         .collect { event ->
                             when (event) {
                                 is AgentStreamEvent.Content -> {
@@ -441,7 +537,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     apiHistory.add(
                         ChatMessage(
                             role = "assistant",
-                            content = assistantText.ifBlank { null },
+                            content = textContent(assistantText.ifBlank { null }),
                             toolCalls = calls.ifEmpty { null }?.map { call ->
                                 ToolCall(
                                     id = call.id,
@@ -454,6 +550,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                             },
                         ),
                     )
+                    persistApiHistory()
 
                     if (calls.isEmpty()) {
                         if (finishReason != "stop") {
@@ -511,12 +608,13 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         apiHistory.add(
                             ChatMessage(
                                 role = "tool",
-                                content = outcome.result,
+                                content = textContent(outcome.result),
                                 toolCallId = call.id,
                             ),
                         )
                         responded.add(call.id)
                     }
+                    persistApiHistory()
                 }
                 if (!completed) {
                     val notice = "최대 단계(${AgentUiState.MAX_STEPS})에 도달했습니다. " +
@@ -526,11 +624,13 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 }
             } catch (c: CancellationException) {
                 respondMissing(activeCalls, responded)
+                withContext(NonCancellable) { persistApiHistory() }
                 addNotice("작업을 중지했습니다.")
                 persist("notice", "작업을 중지했습니다.")
                 throw c
             } catch (t: Exception) {
                 respondMissing(activeCalls, responded)
+                persistApiHistory()
                 val message = NimErrors.friendlyFor(t)
                 addMessage(
                     AgentMsg(
@@ -541,6 +641,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 )
                 persist("error", message)
             } finally {
+                KeepAliveService.end(container.appContext)
                 questionDeferred = null
                 _state.update { it.copy(running = false, pendingQuestion = null) }
             }
@@ -638,7 +739,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
             apiHistory.add(
                 ChatMessage(
                     role = "tool",
-                    content = "ERROR: 작업이 중단되었습니다",
+                    content = textContent("ERROR: 작업이 중단되었습니다"),
                     toolCallId = call.id,
                 ),
             )
@@ -692,6 +793,86 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun resumeSession(id: Long) {
+        if (_state.value.running) return
+        viewModelScope.launch {
+            val session = container.agentHistory.session(id) ?: return@launch
+            val uri = session.workspaceUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            if (uri != null && uri != workspace?.treeUri) {
+                _state.update { it.copy(workspaceLoading = true, banner = null) }
+                try {
+                    val ws = Workspace.open(container.appContext, uri)
+                    ws.load()
+                    workspace = ws
+                    tools = AgentTools(ws)
+                    container.store.saveAgentTreeUri(uri.toString())
+                    _state.update {
+                        it.copy(
+                            workspaceName = ws.name,
+                            workspaceReady = true,
+                            workspaceLoading = false,
+                            workspaceTruncated = ws.truncated,
+                            fileCount = ws.fileCount,
+                        )
+                    }
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (t: Exception) {
+                    _state.update {
+                        it.copy(
+                            workspaceLoading = false,
+                            banner = "세션의 작업 폴더를 열 수 없습니다: ${t.message}",
+                        )
+                    }
+                    return@launch
+                }
+            } else if (workspace == null) {
+                banner("세션을 이어가려면 먼저 작업 폴더를 선택하세요.")
+                return@launch
+            }
+
+            apiHistory.clear()
+            val stored = session.apiJson?.let {
+                runCatching { historyJson.decodeFromString<List<ChatMessage>>(it) }.getOrNull()
+            }
+            if (stored != null) apiHistory.addAll(stored)
+            undoData.clear()
+            sessionId = id
+            val msgs = container.agentHistory.messages(id).map { entity ->
+                AgentMsg(
+                    id = entity.id,
+                    kind = entity.kind,
+                    text = entity.text,
+                    toolName = entity.toolName,
+                    toolStatus = if (entity.kind == "tool") "ok" else null,
+                )
+            }
+            if (apiHistory.isEmpty()) {
+                msgs.filter { it.kind == "user" || it.kind == "assistant" }
+                    .filter { it.text.isNotBlank() }
+                    .forEach { apiHistory.add(ChatMessage(it.kind, textContent(it.text))) }
+            }
+            nextId = maxOf(nextId, (msgs.maxOfOrNull { it.id } ?: 0L) + 1)
+            _state.update {
+                it.copy(
+                    messages = msgs,
+                    attachments = emptyList(),
+                    attachmentsLoading = false,
+                    todos = emptyList(),
+                    pendingQuestion = null,
+                    tokens = 0,
+                    tokensExact = false,
+                    tokensPerSecond = 0,
+                    selectedModel = session.model,
+                    historyView = null,
+                    banner = null,
+                )
+            }
+            container.store.saveAgentModel(session.model)
+            addNotice("세션을 이어갑니다: ${session.title}")
+        }
+    }
+
     private suspend fun ensureSession(title: String, model: String, workspaceName: String) {
         if (sessionId != null) return
         try {
@@ -699,11 +880,47 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 title = title.replace('\n', ' ').take(80),
                 model = model,
                 workspaceName = workspaceName,
+                workspaceUri = workspace?.treeUri?.toString(),
             )
         } catch (c: CancellationException) {
             throw c
         } catch (_: Exception) {
         }
+    }
+
+    private suspend fun persistApiHistory() {
+        val id = sessionId ?: return
+        val sanitized = apiHistory.map { message ->
+            ChatMessage(
+                role = message.role,
+                content = sanitizeContent(message.content),
+                toolCalls = message.toolCalls,
+                toolCallId = message.toolCallId,
+            )
+        }
+        try {
+            container.agentHistory.saveApiHistory(id, historyJson.encodeToString(sanitized))
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun sanitizeContent(content: JsonElement?): JsonElement? {
+        val array = content as? JsonArray ?: return content
+        return JsonArray(
+            array.mapNotNull { element ->
+                val obj = element as? JsonObject ?: return@mapNotNull element
+                if (obj["type"]?.jsonPrimitive?.contentOrNull == "image_url") {
+                    buildJsonObject {
+                        put("type", "text")
+                        put("text", "[이미지 첨부]")
+                    }
+                } else {
+                    obj
+                }
+            },
+        )
     }
 
     private suspend fun persist(kind: String, text: String, toolName: String? = null) {

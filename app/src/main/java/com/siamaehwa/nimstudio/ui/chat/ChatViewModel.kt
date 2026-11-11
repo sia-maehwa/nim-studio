@@ -3,11 +3,17 @@ package com.siamaehwa.nimstudio.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.siamaehwa.nimstudio.AppContainer
+import com.siamaehwa.nimstudio.KeepAliveService
+import com.siamaehwa.nimstudio.core.AttachmentContent
+import com.siamaehwa.nimstudio.core.Attachments
 import com.siamaehwa.nimstudio.core.ChatTurn
 import com.siamaehwa.nimstudio.core.ModelKinds
 import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.NimStreamEvent
+import com.siamaehwa.nimstudio.core.ReasoningEffort
+import com.siamaehwa.nimstudio.core.TokenEstimator
+import com.siamaehwa.nimstudio.core.TokenUsage
 import com.siamaehwa.nimstudio.core.db.ConversationEntity
 import com.siamaehwa.nimstudio.core.db.MessageEntity
 import kotlinx.coroutines.CancellationException
@@ -23,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 
 enum class ChatPreset(val label: String, val systemPrompt: String) {
     General(
@@ -43,6 +50,8 @@ data class ChatMsg(
     val streaming: Boolean = false,
     val detail: String? = null,
     val truncated: Boolean = false,
+    val attachmentNames: List<String> = emptyList(),
+    val parts: JsonElement? = null,
 )
 
 data class ChatUiState(
@@ -50,8 +59,14 @@ data class ChatUiState(
     val chatModels: List<NimModel> = emptyList(),
     val selectedModel: String? = null,
     val preset: ChatPreset = ChatPreset.General,
+    val reasoning: ReasoningEffort = ReasoningEffort.Default,
     val messages: List<ChatMsg> = emptyList(),
+    val attachments: List<AttachmentContent> = emptyList(),
+    val attachmentsLoading: Boolean = false,
     val streaming: Boolean = false,
+    val tokens: Int = 0,
+    val tokensExact: Boolean = false,
+    val tokensPerSecond: Int = 0,
     val hasKey: Boolean? = null,
     val banner: String? = null,
     val notice: String? = null,
@@ -81,6 +96,11 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 if (!saved.isNullOrBlank() && _state.value.selectedModel == null) {
                     _state.update { it.copy(selectedModel = saved) }
                 }
+            }
+        }
+        viewModelScope.launch {
+            container.store.chatReasoning.collect { effort ->
+                _state.update { it.copy(reasoning = effort) }
             }
         }
         viewModelScope.launch {
@@ -152,12 +172,58 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(preset = preset) }
     }
 
+    fun setReasoning(effort: ReasoningEffort) {
+        _state.update { it.copy(reasoning = effort) }
+        viewModelScope.launch { container.store.saveChatReasoning(effort) }
+    }
+
+    fun addAttachments(uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        val snapshot = _state.value
+        val room = Attachments.MAX_FILES - snapshot.attachments.size
+        if (room <= 0) {
+            _state.update { it.copy(notice = "첨부는 최대 ${Attachments.MAX_FILES}개까지 가능합니다") }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(attachmentsLoading = true) }
+            val loaded = mutableListOf<AttachmentContent>()
+            var error: String? = null
+            for (uri in uris.take(room)) {
+                Attachments.load(container.appContext, uri)
+                    .onSuccess { loaded.add(it) }
+                    .onFailure { error = it.message }
+            }
+            _state.update { s ->
+                s.copy(
+                    attachments = (s.attachments + loaded).take(Attachments.MAX_FILES),
+                    attachmentsLoading = false,
+                    notice = error ?: if (loaded.isNotEmpty()) {
+                        "첨부 ${loaded.size}개를 추가했습니다"
+                    } else {
+                        s.notice
+                    },
+                )
+            }
+        }
+    }
+
+    fun removeAttachment(index: Int) {
+        _state.update { s ->
+            s.copy(attachments = s.attachments.filterIndexed { i, _ -> i != index })
+        }
+    }
+
     fun newChat() {
         if (_state.value.streaming) return
         _state.update {
             it.copy(
                 conversationId = null,
                 messages = emptyList(),
+                attachments = emptyList(),
+                tokens = 0,
+                tokensExact = false,
+                tokensPerSecond = 0,
                 banner = null,
                 notice = null,
             )
@@ -173,6 +239,10 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 it.copy(
                     conversationId = id,
                     messages = mapped,
+                    attachments = emptyList(),
+                    tokens = 0,
+                    tokensExact = false,
+                    tokensPerSecond = 0,
                     banner = null,
                     notice = null,
                 )
@@ -206,7 +276,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
     fun send(text: String) {
         val prompt = text.trim()
         val snapshot = _state.value
-        if (prompt.isEmpty() || snapshot.streaming) return
+        val attachments = snapshot.attachments
+        if ((prompt.isEmpty() && attachments.isEmpty()) || snapshot.streaming) return
         if (snapshot.hasKey != true) {
             _state.update { it.copy(banner = "API 키를 먼저 설정하세요.") }
             return
@@ -217,29 +288,45 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
 
-        val userMsg = ChatMsg(id = nextId++, role = "user", content = prompt)
+        val parts = Attachments.userContent(prompt, attachments)
+        val userMsg = ChatMsg(
+            id = nextId++,
+            role = "user",
+            content = prompt,
+            attachmentNames = attachments.map { it.name },
+            parts = parts,
+        )
         val assistantId = nextId++
         _state.update {
             it.copy(
                 messages = it.messages + userMsg +
                     ChatMsg(id = assistantId, role = "assistant", content = "", streaming = true),
+                attachments = emptyList(),
                 streaming = true,
+                tokens = 0,
+                tokensExact = false,
+                tokensPerSecond = 0,
                 banner = null,
                 notice = null,
             )
         }
 
         val turns = buildTurns(snapshot.preset.systemPrompt, snapshot.messages + userMsg)
+        val reasoning = snapshot.reasoning.id
 
         streamJob = viewModelScope.launch {
-            val convId = runCatching { ensureConversation(prompt, model) }.getOrNull()
+            val convId = runCatching {
+                ensureConversation(prompt.ifBlank { attachments.firstOrNull()?.name ?: "첨부" }, model)
+            }.getOrNull()
             if (convId != null) {
                 runCatching {
                     dao.insertMessage(
                         MessageEntity(
                             conversationId = convId,
                             role = "user",
-                            content = prompt,
+                            content = prompt.ifBlank {
+                                attachments.joinToString(", ") { it.name }
+                            },
                             model = model,
                             createdAt = System.currentTimeMillis(),
                         ),
@@ -254,6 +341,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 initialReasoning = "",
                 model = model,
                 convId = convId,
+                reasoningEffort = reasoning,
             )
         }
     }
@@ -269,6 +357,9 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { s ->
             s.copy(
                 streaming = true,
+                tokens = 0,
+                tokensExact = false,
+                tokensPerSecond = 0,
                 banner = null,
                 notice = null,
                 messages = s.messages.map {
@@ -276,6 +367,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 },
             )
         }
+        val reasoning = snapshot.reasoning.id
         streamJob = viewModelScope.launch {
             streamInto(
                 turns = turns,
@@ -284,6 +376,7 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                 initialReasoning = msg.reasoning,
                 model = model,
                 convId = snapshot.conversationId,
+                reasoningEffort = reasoning,
             )
         }
     }
@@ -295,21 +388,37 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         initialReasoning: String,
         model: String,
         convId: Long?,
+        reasoningEffort: String?,
     ): Unit = coroutineScope {
         val content = StringBuilder(initialContent)
         val reasoning = StringBuilder(initialReasoning)
         val channel = Channel<Pair<Boolean, String>>(Channel.UNLIMITED)
         var finishReason: String? = null
+        var usage: TokenUsage? = null
+        val promptEstimate = TokenEstimator.estimate(
+            turns.joinToString("\n") { it.content },
+        )
+        var firstTokenAt = 0L
 
+        KeepAliveService.begin(container.appContext)
         val producer = async {
             try {
                 container.repository
-                    .stream(model, turns, temperature = 0.7, maxTokens = MAX_RESPONSE_TOKENS)
+                    .stream(
+                        model = model,
+                        turns = turns,
+                        temperature = 0.7,
+                        maxTokens = MAX_RESPONSE_TOKENS,
+                        reasoningEffort = reasoningEffort,
+                    )
                     .collect { event ->
                         when (event) {
                             is NimStreamEvent.Content -> channel.trySend(true to event.text)
                             is NimStreamEvent.Reasoning -> channel.trySend(false to event.text)
-                            is NimStreamEvent.Finished -> finishReason = event.reason
+                            is NimStreamEvent.Finished -> {
+                                finishReason = event.reason
+                                usage = event.usage
+                            }
                         }
                     }
             } finally {
@@ -324,6 +433,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     val next = channel.tryReceive().getOrNull() ?: break
                     if (next.first) content.append(next.second) else reasoning.append(next.second)
                 }
+                val now = System.currentTimeMillis()
+                if (firstTokenAt == 0L) firstTokenAt = now
                 updateAssistant(
                     id = assistantId,
                     content = content.toString(),
@@ -331,9 +442,50 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
                     streaming = true,
                     detail = null,
                 )
+                val completion = TokenEstimator.estimate(
+                    content.toString() + reasoning.toString(),
+                )
+                val elapsed = if (firstTokenAt > 0L) {
+                    (now - firstTokenAt).coerceAtLeast(1L)
+                } else {
+                    0L
+                }
+                val speed = if (elapsed >= 250L) {
+                    (completion * 1000.0 / elapsed).toInt()
+                } else {
+                    0
+                }
+                _state.update {
+                    it.copy(
+                        tokens = promptEstimate + completion,
+                        tokensExact = false,
+                        tokensPerSecond = speed,
+                    )
+                }
                 delay(33)
             }
             producer.await()
+            val now = System.currentTimeMillis()
+            val elapsed = if (firstTokenAt > 0L) {
+                (now - firstTokenAt).coerceAtLeast(1L)
+            } else {
+                0L
+            }
+            val completion = TokenEstimator.estimate(content.toString() + reasoning.toString())
+            val finalUsage = usage
+            val speed = if (elapsed >= 250L) {
+                val tokens = finalUsage?.completionTokens?.takeIf { it > 0 } ?: completion
+                (tokens * 1000.0 / elapsed).toInt()
+            } else {
+                0
+            }
+            _state.update {
+                it.copy(
+                    tokens = finalUsage?.totalTokens ?: (promptEstimate + completion),
+                    tokensExact = finalUsage != null,
+                    tokensPerSecond = speed,
+                )
+            }
             updateAssistant(
                 id = assistantId,
                 content = content.toString(),
@@ -390,6 +542,8 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
             if (convId != null && hasText) {
                 persistAssistant(convId, model, content.toString(), reasoning.toString())
             }
+        } finally {
+            KeepAliveService.end(container.appContext)
         }
     }
 
@@ -523,9 +677,9 @@ class ChatViewModel(private val container: AppContainer) : ViewModel() {
         val turns = mutableListOf(ChatTurn("system", systemPrompt))
         messages
             .filter { it.role == "user" || it.role == "assistant" }
-            .filter { it.content.isNotBlank() }
+            .filter { it.content.isNotBlank() || it.parts != null }
             .takeLast(20)
-            .forEach { turns.add(ChatTurn(it.role, it.content)) }
+            .forEach { turns.add(ChatTurn(it.role, it.content, it.parts)) }
         return turns
     }
 }

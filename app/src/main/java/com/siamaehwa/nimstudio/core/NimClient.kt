@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -27,12 +28,13 @@ import okhttp3.RequestBody.Companion.toRequestBody
 sealed interface NimStreamEvent {
     data class Content(val text: String) : NimStreamEvent
     data class Reasoning(val text: String) : NimStreamEvent
-    data class Finished(val reason: String?) : NimStreamEvent
+    data class Finished(val reason: String?, val usage: TokenUsage? = null) : NimStreamEvent
 }
 
 data class ChatTurn(
     val role: String,
     val content: String,
+    val parts: JsonElement? = null,
 )
 
 data class ImageGenParams(
@@ -102,7 +104,7 @@ class NimClient {
         withContext(Dispatchers.IO) {
             val payload = ChatRequest(
                 model = model,
-                messages = listOf(ChatMessage("user", "Reply with exactly: OK")),
+                messages = listOf(ChatMessage("user", textContent("Reply with exactly: OK"))),
                 temperature = 0.0,
                 topP = 1.0,
                 maxTokens = 16,
@@ -120,7 +122,7 @@ class NimClient {
                 val elapsedMs = (System.nanoTime() - started) / 1_000_000
                 if (!response.isSuccessful) throw apiException(response.code, bodyText)
                 val parsed = json.decodeFromString(ChatCompletionResponse.serializer(), bodyText)
-                val content = parsed.choices.firstOrNull()?.message?.content.orEmpty()
+                val content = parsed.choices.firstOrNull()?.message?.content.asMessageText()
                 content to elapsedMs
             }
         }
@@ -132,14 +134,19 @@ class NimClient {
         turns: List<ChatTurn>,
         temperature: Double = 0.7,
         maxTokens: Int = 4096,
+        reasoningEffort: String? = null,
     ): Flow<NimStreamEvent> = flow {
         val payload = ChatRequest(
             model = model,
-            messages = turns.map { ChatMessage(it.role, it.content) },
+            messages = turns.map {
+                ChatMessage(it.role, it.parts ?: textContent(it.content))
+            },
             temperature = temperature,
             topP = 0.95,
             maxTokens = maxTokens,
             stream = true,
+            reasoningEffort = reasoningEffort,
+            streamOptions = StreamOptions(includeUsage = true),
         )
         val request = Request.Builder()
             .url(normalizeBase(baseUrl) + "/chat/completions")
@@ -160,6 +167,7 @@ class NimClient {
             }
             val source = response.body?.source() ?: throw IOException("응답 본문이 비어 있습니다")
             var finishReason: String? = null
+            var usage: TokenUsage? = null
             var sawDone = false
             while (true) {
                 coroutineContext.ensureActive()
@@ -174,6 +182,7 @@ class NimClient {
                 val chunk = runCatching {
                     json.decodeFromString(ChatChunk.serializer(), payloadLine)
                 }.getOrNull() ?: continue
+                chunk.usage?.let { usage = it }
                 val choice = chunk.choices.firstOrNull() ?: continue
                 val delta = choice.delta
                 if (delta != null) {
@@ -184,7 +193,7 @@ class NimClient {
                 }
                 choice.finishReason?.let { finishReason = normalizeFinishReason(it) }
             }
-            emit(NimStreamEvent.Finished(finishReason ?: if (sawDone) "stop" else null))
+            emit(NimStreamEvent.Finished(finishReason ?: if (sawDone) "stop" else null, usage))
         }
     }.flowOn(Dispatchers.IO)
 
@@ -414,6 +423,7 @@ class NimClient {
         tools: List<ToolSpec>,
         temperature: Double = 0.2,
         maxTokens: Int = 4096,
+        reasoningEffort: String? = null,
     ): Flow<AgentStreamEvent> = flow {
         val payload = ChatRequest(
             model = model,
@@ -424,6 +434,7 @@ class NimClient {
             stream = true,
             tools = tools,
             toolChoice = "auto",
+            reasoningEffort = reasoningEffort,
             streamOptions = StreamOptions(includeUsage = true),
         )
         val request = Request.Builder()

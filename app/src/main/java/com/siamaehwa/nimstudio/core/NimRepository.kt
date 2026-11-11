@@ -64,10 +64,11 @@ class NimRepository(
         model: String,
         messages: List<ChatMessage>,
         tools: List<ToolSpec>,
+        reasoningEffort: String? = null,
     ): Flow<AgentStreamEvent> = flow {
         val key = store.apiKey.first() ?: throw MissingApiKeyException()
         val base = store.baseUrl.first()
-        emitAll(client.streamAgent(key, base, model, messages, tools))
+        emitAll(client.streamAgent(key, base, model, messages, tools, reasoningEffort = reasoningEffort))
     }
 
     fun stream(
@@ -75,9 +76,20 @@ class NimRepository(
         turns: List<ChatTurn>,
         temperature: Double,
         maxTokens: Int,
+        reasoningEffort: String? = null,
     ): Flow<NimStreamEvent> = flow {
         val key = store.apiKey.first() ?: throw MissingApiKeyException()
         val base = store.baseUrl.first()
-        emitAll(client.streamChat(key, base, model, turns, temperature, maxTokens))
+        emitAll(
+            client.streamChat(
+                key,
+                base,
+                model,
+                turns,
+                temperature,
+                maxTokens,
+                reasoningEffort = reasoningEffort,
+            ),
+        )
     }
 }

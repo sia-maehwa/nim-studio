@@ -2,6 +2,8 @@
 
 package com.siamaehwa.nimstudio.ui.chat
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -35,6 +37,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -83,9 +86,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.siamaehwa.nimstudio.NimStudioApp
+import com.siamaehwa.nimstudio.core.AttachmentContent
 import com.siamaehwa.nimstudio.core.NimModel
+import com.siamaehwa.nimstudio.core.ReasoningEffort
 import com.siamaehwa.nimstudio.core.db.ConversationEntity
+import com.siamaehwa.nimstudio.ui.common.AttachmentChips
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
+import com.siamaehwa.nimstudio.ui.common.ReasoningPicker
 import com.siamaehwa.nimstudio.ui.common.RenderedMarkdown
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
 import java.time.Instant
@@ -107,11 +114,22 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
     val systemDark = isSystemInDarkTheme()
     val darkMode by app.container.store.darkMode.collectAsStateWithLifecycle(initialValue = null)
     val isDark = darkMode ?: systemDark
+    val attachPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) vm.addAttachments(uris)
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScreenHeader(
             title = "채팅",
-            subtitle = state.selectedModel ?: "모델을 선택하세요",
+            subtitle = buildString {
+                append(state.selectedModel ?: "모델을 선택하세요")
+                if (state.tokens > 0) {
+                    append(" · ")
+                    append(tokenLabel(state.tokens, state.tokensExact, state.tokensPerSecond))
+                }
+            },
         ) {
             IconButton(onClick = { showConversations = true }) {
                 Icon(Icons.Filled.History, contentDescription = "대화 목록")
@@ -158,7 +176,12 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 modifier = Modifier.weight(1f),
             )
         } else {
-            PresetRow(selected = state.preset, onSelect = vm::setPreset)
+            PresetRow(
+                selected = state.preset,
+                onSelect = vm::setPreset,
+                reasoning = state.reasoning,
+                onReasoning = vm::setReasoning,
+            )
 
             val reversed = remember(state.messages) { state.messages.asReversed() }
             LaunchedEffect(state.messages.size) {
@@ -189,6 +212,10 @@ fun ChatScreen(onOpenSettings: () -> Unit) {
                 draft = draft,
                 onDraftChange = { draft = it },
                 streaming = state.streaming,
+                attachments = state.attachments,
+                attachmentsLoading = state.attachmentsLoading,
+                onAttach = { attachPicker.launch(arrayOf("*/*")) },
+                onRemoveAttachment = vm::removeAttachment,
                 onSend = {
                     val text = draft
                     draft = ""
@@ -379,13 +406,25 @@ private fun UserBubble(msg: ChatMsg) {
             shape = RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp),
             modifier = Modifier.widthIn(max = 340.dp),
         ) {
-            SelectionContainer {
-                Text(
-                    text = msg.content,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                msg.attachmentNames.forEach { name ->
+                    Text(
+                        "첨부 · $name",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+                if (msg.content.isNotBlank()) {
+                    SelectionContainer {
+                        Text(
+                            text = msg.content,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
             }
         }
     }
@@ -617,7 +656,12 @@ private fun BannerBar(message: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun PresetRow(selected: ChatPreset, onSelect: (ChatPreset) -> Unit) {
+private fun PresetRow(
+    selected: ChatPreset,
+    onSelect: (ChatPreset) -> Unit,
+    reasoning: ReasoningEffort,
+    onReasoning: (ReasoningEffort) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -638,6 +682,7 @@ private fun PresetRow(selected: ChatPreset, onSelect: (ChatPreset) -> Unit) {
                 label = { Text(preset.label) },
             )
         }
+        ReasoningPicker(selected = reasoning, onSelect = onReasoning)
     }
 }
 
@@ -707,47 +752,75 @@ private fun InputBar(
     draft: String,
     onDraftChange: (String) -> Unit,
     streaming: Boolean,
+    attachments: List<AttachmentContent>,
+    attachmentsLoading: Boolean,
+    onAttach: () -> Unit,
+    onRemoveAttachment: (Int) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
     val focus = LocalFocusManager.current
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .imePadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom,
+            .imePadding(),
     ) {
-        OutlinedTextField(
-            value = draft,
-            onValueChange = onDraftChange,
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("메시지 입력…") },
-            maxLines = 6,
-            shape = RoundedCornerShape(18.dp),
-            trailingIcon = {
-                IconButton(onClick = {
-                    keyboard?.hide()
-                    focus.clearFocus()
-                }) {
-                    Icon(
-                        Icons.Filled.KeyboardHide,
-                        contentDescription = "키보드 내리기",
-                    )
-                }
-            },
+        AttachmentChips(
+            attachments = attachments,
+            loading = attachmentsLoading,
+            onRemove = onRemoveAttachment,
         )
-        Spacer(Modifier.width(8.dp))
-        FilledIconButton(
-            onClick = { if (streaming) onStop() else onSend() },
-            enabled = streaming || draft.isNotBlank(),
-            modifier = Modifier.size(48.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom,
         ) {
-            Icon(
-                imageVector = if (streaming) Icons.Filled.Stop else Icons.AutoMirrored.Filled.Send,
-                contentDescription = if (streaming) "중지" else "전송",
+            IconButton(onClick = onAttach) {
+                Icon(Icons.Filled.AttachFile, contentDescription = "파일 첨부")
+            }
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("메시지 입력…") },
+                maxLines = 6,
+                shape = RoundedCornerShape(18.dp),
+                trailingIcon = {
+                    IconButton(onClick = {
+                        keyboard?.hide()
+                        focus.clearFocus()
+                    }) {
+                        Icon(
+                            Icons.Filled.KeyboardHide,
+                            contentDescription = "키보드 내리기",
+                        )
+                    }
+                },
             )
+            Spacer(Modifier.width(8.dp))
+            FilledIconButton(
+                onClick = { if (streaming) onStop() else onSend() },
+                enabled = streaming || draft.isNotBlank() || attachments.isNotEmpty(),
+                modifier = Modifier.size(48.dp),
+            ) {
+                Icon(
+                    imageVector = if (streaming) {
+                        Icons.Filled.Stop
+                    } else {
+                        Icons.AutoMirrored.Filled.Send
+                    },
+                    contentDescription = if (streaming) "중지" else "전송",
+                )
+            }
         }
     }
+}
+
+private fun tokenLabel(tokens: Int, exact: Boolean, speed: Int): String = buildString {
+    append("tok ")
+    if (!exact) append("≈")
+    append("%,d".format(tokens))
+    if (speed > 0) append(" · ").append(speed).append(" tok/s")
 }
