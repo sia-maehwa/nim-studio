@@ -3,12 +3,14 @@ package com.siamaehwa.nimstudio.core.hf
 import android.util.Base64
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -43,8 +45,9 @@ object HfErrors {
                     "설정에서 토큰을 다시 확인하세요.$suffix"
 
             status == 402 ->
-                "결제/크레딧 오류(402): Inference Providers 무료 크레딧이 " +
-                    "소진되었을 수 있습니다. 잠시 후 다시 시도하거나 Provider를 바꾸세요.$suffix"
+                "결제/크레딧 오류(402): Hugging Face 무료 계정에는 월 크레딧이 없습니다. " +
+                    "PRO($2/월)로 업그레이드하거나 크레딧을 구매해야 Inference Providers를 " +
+                    "사용할 수 있습니다.$suffix"
 
             status == 403 ->
                 "권한 없음(403): Gated 모델 동의 여부와 토큰의 " +
@@ -116,6 +119,22 @@ private data class HfNativeChunk(
 private data class HfNativeToken(val text: String? = null, val special: Boolean = false)
 
 @Serializable
+private data class HfFalQueue(
+    @SerialName("request_id") val requestId: String? = null,
+    val status: String? = null,
+    @SerialName("response_url") val responseUrl: String? = null,
+)
+
+@Serializable
+private data class HfFalStatus(val status: String? = null)
+
+@Serializable
+private data class HfFalResult(val images: List<HfFalImage> = emptyList())
+
+@Serializable
+private data class HfFalImage(val url: String? = null)
+
+@Serializable
 private data class HfWhoAmI(
     val name: String? = null,
     val user: String? = null,
@@ -129,6 +148,9 @@ class HfClient {
         private const val MAX_ERROR_BYTES = 64_000L
         private const val MAX_IMAGE_BYTES = 25_000_000L
         private const val MAX_RESPONSE_BYTES = 2_000_000L
+        private const val FAL_POLL_TIMEOUT_MS = 240_000L
+        private const val FAL_POLL_INTERVAL_MS = 800L
+        private val FAL_FAILED_STATES = setOf("FAILED", "ERROR", "CANCELLED")
     }
 
     private val json = Json {
@@ -179,6 +201,7 @@ class HfClient {
         token: String?,
         query: String,
         limit: Int = 20,
+        availableOnly: Boolean = false,
     ): List<HfModelSummary> = withContext(Dispatchers.IO) {
         val builder = "$HUB_BASE/api/models".toHttpUrl().newBuilder()
             .addQueryParameter("limit", limit.coerceIn(1, 50).toString())
@@ -187,6 +210,7 @@ class HfClient {
             .addQueryParameter("direction", "-1")
             .addQueryParameter("expand[]", "inferenceProviderMapping")
             .addQueryParameter("expand[]", "inference")
+        if (availableOnly) builder.addQueryParameter("inference_provider", "all")
         val trimmed = query.trim()
         if (trimmed.isNotEmpty()) builder.addQueryParameter("search", trimmed)
         val request = Request.Builder()
@@ -345,7 +369,11 @@ class HfClient {
         for ((url, payloads) in attempts) {
             for (payload in payloads) {
                 try {
-                    return@withContext postImage(url, payload, token)
+                    return@withContext if (chosen == "fal-ai") {
+                        postFalImage(url, payload, token)
+                    } else {
+                        postImage(url, payload, token)
+                    }
                 } catch (error: HfApiException) {
                     lastError = error
                     if (error.status == 400 || error.status == 422) continue
@@ -490,6 +518,99 @@ class HfClient {
         }
     }
 
+    private suspend fun postFalImage(url: String, payload: String, token: String?): ByteArray {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .apply { if (!token.isNullOrBlank()) header("Authorization", "Bearer $token") }
+            .post(payload.toRequestBody(jsonMedia))
+            .build()
+        val queueText = imageHttp.newCall(request).execute().use { response ->
+            val bytes = readBytesLimited(response, MAX_ERROR_BYTES)
+            if (!response.isSuccessful) {
+                val text = bytes.toString(Charsets.UTF_8)
+                throw HfApiException(response.code, HfErrors.friendlyFor(response.code, text))
+            }
+            bytes.toString(Charsets.UTF_8)
+        }
+
+        runCatching { json.decodeFromString(HfFalResult.serializer(), queueText) }
+            .getOrNull()
+            ?.images
+            ?.firstOrNull()
+            ?.url
+            ?.let { return downloadImage(it) }
+
+        val queue = runCatching { json.decodeFromString(HfFalQueue.serializer(), queueText) }
+            .getOrNull()
+            ?: throw IOException("fal-ai 큐 응답을 해석할 수 없습니다: ${queueText.take(300)}")
+        queue.requestId ?: throw IOException(
+            "fal-ai 요청 ID가 없습니다: ${queueText.take(300)}",
+        )
+
+        val responseUrl = queue.responseUrl?.takeIf { it.isNotBlank() }
+            ?: url.substringBefore('?')
+        val (statusUrl, resultUrl) = falQueueUrls(responseUrl, url)
+        var status = queue.status.orEmpty().uppercase()
+        val deadline = System.currentTimeMillis() + FAL_POLL_TIMEOUT_MS
+        while (status != "COMPLETED") {
+            if (status in FAL_FAILED_STATES) {
+                throw HfApiException(500, "fal-ai 이미지 생성 실패($status)")
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                throw IOException("fal-ai 이미지 생성 시간 초과(4분)")
+            }
+            delay(FAL_POLL_INTERVAL_MS)
+            coroutineContext.ensureActive()
+            val statusText = falGet(statusUrl, token)
+            status = runCatching {
+                json.decodeFromString(HfFalStatus.serializer(), statusText).status
+            }.getOrNull().orEmpty().uppercase()
+        }
+
+        val resultText = falGet(resultUrl, token)
+        val result = runCatching {
+            json.decodeFromString(HfFalResult.serializer(), resultText)
+        }.getOrNull() ?: throw IOException("fal-ai 결과를 해석할 수 없습니다: ${resultText.take(300)}")
+        val imageUrl = result.images.firstOrNull()?.url?.takeIf { it.isNotBlank() }
+            ?: throw IOException("fal-ai 결과에 이미지가 없습니다: ${resultText.take(300)}")
+        return downloadImage(imageUrl)
+    }
+
+    private fun falGet(url: String, token: String?): String {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .apply { if (!token.isNullOrBlank()) header("Authorization", "Bearer $token") }
+            .get()
+            .build()
+        imageHttp.newCall(request).execute().use { response ->
+            val bytes = readBytesLimited(response, MAX_ERROR_BYTES)
+            if (!response.isSuccessful) {
+                val text = bytes.toString(Charsets.UTF_8)
+                throw HfApiException(response.code, HfErrors.friendlyFor(response.code, text))
+            }
+            return bytes.toString(Charsets.UTF_8)
+        }
+    }
+
+    private fun downloadImage(imageUrl: String): ByteArray {
+        val request = Request.Builder()
+            .url(imageUrl)
+            .header("Accept", "image/*")
+            .get()
+            .build()
+        imageHttp.newCall(request).execute().use { response ->
+            val bytes = readBytesLimited(response, MAX_IMAGE_BYTES)
+            if (!response.isSuccessful) {
+                val text = bytes.toString(Charsets.UTF_8)
+                throw HfApiException(response.code, HfErrors.friendlyFor(response.code, text))
+            }
+            if (bytes.isEmpty()) throw IOException("빈 이미지 응답을 받았습니다")
+            return bytes
+        }
+    }
+
     suspend fun testEndpointChat(config: HfEndpointConfig, token: String?): String =
         withContext(Dispatchers.IO) {
             val result = StringBuilder()
@@ -572,4 +693,18 @@ class HfClient {
             bytes[2] == 'F'.code.toByte() && bytes[3] == 'F'.code.toByte()
         return png || jpeg || gif || webp
     }
+}
+
+internal fun falQueueUrls(responseUrl: String, requestUrl: String): Pair<String, String> {
+    val request = URI(requestUrl)
+    val response = URI(responseUrl)
+    val base = buildString {
+        append(request.scheme ?: "https")
+        append("://")
+        append(request.rawAuthority ?: "router.huggingface.co")
+        if (request.host == "router.huggingface.co") append("/fal-ai")
+    }
+    val query = request.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" }.orEmpty()
+    val path = response.rawPath.orEmpty()
+    return "$base$path/status$query" to "$base$path$query"
 }

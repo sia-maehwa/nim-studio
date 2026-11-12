@@ -33,6 +33,7 @@ data class HfUiState(
     val results: List<HfModelSummary> = emptyList(),
     val searchError: String? = null,
     val taskFilter: String = "all",
+    val availableOnly: Boolean = true,
     val saved: List<HfSavedModel> = emptyList(),
     val opening: Boolean = false,
     val openError: String? = null,
@@ -182,6 +183,11 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(taskFilter = value) }
     }
 
+    fun toggleAvailableOnly() {
+        _state.update { it.copy(availableOnly = !it.availableOnly) }
+        search()
+    }
+
     fun saveToken() {
         val input = _state.value.tokenInput.trim()
         if (input.isEmpty()) {
@@ -254,7 +260,13 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
         if (_state.value.searching) return
         viewModelScope.launch {
             _state.update { it.copy(searching = true, searchError = null) }
-            runCatching { repository.searchModels(currentToken, _state.value.query) }
+            runCatching {
+                repository.searchModels(
+                    currentToken,
+                    _state.value.query,
+                    availableOnly = _state.value.availableOnly,
+                )
+            }
                 .onSuccess { models ->
                     _state.update { it.copy(searching = false, results = models) }
                 }

@@ -38,9 +38,12 @@ https://github.com/sia-maehwa/nim-studio/releases/download/rolling-latest/app-re
    `run_command`로 셸 명령(ls·grep·sed·find 등)을 실행합니다. 빌드·컴파일 도구(JDK·git·node)는
    기기에 없어 지원하지 않습니다.
 7. **Hugging Face**: 하단 **Hugging Face** 탭에서 HF 토큰(`hf_...`)을 등록하면
-   Inference Providers로 채팅·이미지 생성이 가능합니다. 모델 탐색 탭은 HF Hub를 검색해
-   실행 가능(Provider live)·Provider 미지원·Gated·배포 필요 상태를 구분해 보여주고,
-   Provider를 골라 채팅/이미지에 바로 사용할 수 있습니다. 전용 Inference Endpoint
+   Inference Providers로 채팅·이미지 생성이 가능합니다. 모델 탐색 탭은 기본으로
+   **실행 가능한 모델만** 표시하며(Provider live), Gated·배포 필요 상태도 구분합니다.
+   이미지는 fal-ai 큐(fal-ai/flux/dev 등)로 생성하고, Provider를 골라 채팅/이미지에
+   바로 사용할 수 있습니다. HF Inference Providers는 무료 계정에 월 크레딧이 없어
+   PRO($2/월) 또는 크레딧 구매가 필요하고, 토큰에
+   **Make calls to Inference Providers** 권한이 있어야 합니다. 전용 Inference Endpoint
    (TGI/TEI, OpenAI 호환 또는 HF 네이티브)도 연결 설정 탭에서 등록·테스트할 수 있습니다.
    HF 토큰은 NIM 키와 분리된 Keystore 별칭으로 암호화됩니다.
 8. **플러그인**: 설정 → 에이전트 플러그인에서 JSON 매니페스트로 HTTP 도구를 추가하면 에이전트가 호출합니다.

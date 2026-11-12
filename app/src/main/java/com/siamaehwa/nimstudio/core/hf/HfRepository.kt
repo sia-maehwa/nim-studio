@@ -24,8 +24,11 @@ class HfRepository(
 
     suspend fun verifyToken(token: String): String = client.whoAmI(token)
 
-    suspend fun searchModels(token: String?, query: String): List<HfModelSummary> =
-        client.searchModels(token, query)
+    suspend fun searchModels(
+        token: String?,
+        query: String,
+        availableOnly: Boolean = false,
+    ): List<HfModelSummary> = client.searchModels(token, query, availableOnly = availableOnly)
 
     suspend fun modelDetails(token: String?, modelId: String): HfModelSummary =
         client.modelDetails(token, modelId)

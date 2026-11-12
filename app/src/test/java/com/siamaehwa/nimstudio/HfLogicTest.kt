@@ -4,6 +4,7 @@ import com.siamaehwa.nimstudio.core.hf.HfAvailability
 import com.siamaehwa.nimstudio.core.hf.HfHub
 import com.siamaehwa.nimstudio.core.hf.HfPayloads
 import com.siamaehwa.nimstudio.core.hf.HfTask
+import com.siamaehwa.nimstudio.core.hf.falQueueUrls
 import com.siamaehwa.nimstudio.core.hf.sseDataPayload
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -213,5 +214,30 @@ class HfLogicTest {
         )
         assertNull(HfHub.extractBase64Image("{\"images\":[{\"url\":\"https://x/y.png\"}]}"))
         assertNull(HfHub.extractBase64Image("{\"error\":\"boom\"}"))
+    }
+
+    @Test
+    fun falQueueUrlsFollowRouterBase() {
+        val requestUrl =
+            "https://router.huggingface.co/fal-ai/fal-ai/flux/dev?_subdomain=queue"
+        val (status, result) = falQueueUrls(
+            "https://router.huggingface.co/fal-ai/fal-ai/flux/dev/requests/abc",
+            requestUrl,
+        )
+        assertEquals(
+            "https://router.huggingface.co/fal-ai/fal-ai/flux/dev/requests/abc/status?_subdomain=queue",
+            status,
+        )
+        assertEquals(
+            "https://router.huggingface.co/fal-ai/fal-ai/flux/dev/requests/abc?_subdomain=queue",
+            result,
+        )
+
+        val (directStatus, directResult) = falQueueUrls(
+            "https://queue.fal.run/fal-ai/flux/dev/requests/abc",
+            "https://queue.fal.run/fal-ai/flux/dev",
+        )
+        assertEquals("https://queue.fal.run/fal-ai/flux/dev/requests/abc/status", directStatus)
+        assertEquals("https://queue.fal.run/fal-ai/flux/dev/requests/abc", directResult)
     }
 }

@@ -180,6 +180,11 @@ private fun ExploreTab(state: HfUiState, vm: HfViewModel) {
                 .padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            FilterChip(
+                selected = state.availableOnly,
+                onClick = vm::toggleAvailableOnly,
+                label = { Text("실행 가능만") },
+            )
             listOf("all" to "전체", "chat" to "채팅", "image" to "이미지").forEach { (id, label) ->
                 FilterChip(
                     selected = state.taskFilter == id,
@@ -247,7 +252,11 @@ private fun ExploreTab(state: HfUiState, vm: HfViewModel) {
             filtered.isEmpty() -> EmptyHint(
                 icon = Icons.Filled.Cloud,
                 title = "표시할 모델이 없습니다",
-                body = "검색어를 바꾸거나 새로고침하세요. HF Hub에는 배포가 필요한 모델도 많습니다.",
+                body = if (state.availableOnly) {
+                    "실행 가능한 모델이 없습니다. '실행 가능만'을 끄거나 검색어를 바꿔 보세요."
+                } else {
+                    "검색어를 바꾸거나 새로고침하세요. HF Hub에는 배포가 필요한 모델도 많습니다."
+                },
                 actionLabel = "새로고침",
                 onAction = vm::search,
             )
