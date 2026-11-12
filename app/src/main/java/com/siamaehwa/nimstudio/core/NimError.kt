@@ -37,7 +37,8 @@ object NimErrors {
         is NimApiException -> t.friendly
         is MissingApiKeyException -> "API 키가 설정되지 않았습니다. 설정 화면에서 키를 등록하세요."
         is java.net.UnknownHostException -> "네트워크를 찾을 수 없습니다. 인터넷 연결을 확인하세요."
-        is java.net.SocketTimeoutException -> "응답 시간이 초과되었습니다. 네트워크 상태를 확인하거나 다시 시도하세요."
+        is java.net.SocketTimeoutException ->
+            "모델 응답이 오랫동안 없어 연결을 끊었습니다. 잠시 후 다시 시도하거나 다른 모델을 선택하세요."
         is java.io.InterruptedIOException -> "연결이 끊겼습니다. 네트워크 상태를 확인하세요."
         is java.io.IOException -> "네트워크 오류: ${t.message ?: "연결에 실패했습니다"}"
         else -> t.message ?: t.javaClass.simpleName

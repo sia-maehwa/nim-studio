@@ -2,6 +2,7 @@ package com.siamaehwa.nimstudio.core
 
 import android.util.Base64
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
@@ -87,7 +88,7 @@ class NimClient {
     private val streamHttp = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
+        .readTimeout(300, TimeUnit.SECONDS)
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
@@ -199,6 +200,45 @@ class NimClient {
         reasoningEffort: String? = null,
     ): Flow<NimStreamEvent> = flow {
         var emitted = false
+        var timeoutRetries = 0
+        while (true) {
+            try {
+                streamChatAttempts(
+                    apiKey, baseUrl, model, turns, temperature, maxTokens, reasoningEffort,
+                    hasEmitted = { emitted },
+                ) { event ->
+                    emitted = true
+                    emit(event)
+                }
+                break
+            } catch (e: SocketTimeoutException) {
+                if (emitted) {
+                    emit(NimStreamEvent.Notice("응답이 지연되어 연결이 끊겼습니다. 이어서 생성합니다"))
+                    emit(NimStreamEvent.Finished("timeout"))
+                    break
+                }
+                if (timeoutRetries >= MAX_TIMEOUT_RETRIES) throw e
+                timeoutRetries++
+                emit(
+                    NimStreamEvent.Notice(
+                        "응답이 지연되어 다시 연결합니다 ($timeoutRetries/$MAX_TIMEOUT_RETRIES)",
+                    ),
+                )
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun streamChatAttempts(
+        apiKey: String,
+        baseUrl: String,
+        model: String,
+        turns: List<ChatTurn>,
+        temperature: Double,
+        maxTokens: Int,
+        reasoningEffort: String?,
+        hasEmitted: () -> Boolean,
+        onEvent: suspend (NimStreamEvent) -> Unit,
+    ) {
         var lastError: Exception? = null
         var finished = false
         var fellBack = false
@@ -209,8 +249,7 @@ class NimClient {
                     streamChatOnce(
                         apiKey, baseUrl, model, turns, temperature, tokens, effort,
                     ) { event ->
-                        emitted = true
-                        emit(event)
+                        onEvent(event)
                     }
                     finished = true
                     lastError = null
@@ -218,11 +257,11 @@ class NimClient {
                 } catch (c: CancellationException) {
                     throw c
                 } catch (e: NimApiException) {
-                    if (e.status !in RETRYABLE_STATUSES || emitted) throw e
+                    if (e.status !in RETRYABLE_STATUSES || hasEmitted()) throw e
                     lastError = e
                     if (effort != null && !fellBack) {
                         fellBack = true
-                        emit(
+                        onEvent(
                             NimStreamEvent.Notice(
                                 "이 모델이 추론 강도를 지원하지 않아 기본값으로 다시 시도합니다",
                             ),
@@ -233,7 +272,7 @@ class NimClient {
             }
         }
         if (!finished) lastError?.let { throw it }
-    }.flowOn(Dispatchers.IO)
+    }
 
     private fun effortAttempts(effort: String?): List<String?> =
         if (effort == null) listOf(null) else listOf(effort, null)
@@ -643,6 +682,47 @@ class NimClient {
         reasoningEffort: String? = null,
     ): Flow<AgentStreamEvent> = flow {
         var emitted = false
+        var timeoutRetries = 0
+        while (true) {
+            try {
+                streamAgentAttempts(
+                    apiKey, baseUrl, model, messages, tools, temperature, maxTokens,
+                    reasoningEffort,
+                    hasEmitted = { emitted },
+                ) { event ->
+                    emitted = true
+                    emit(event)
+                }
+                break
+            } catch (e: SocketTimeoutException) {
+                if (emitted) {
+                    emit(AgentStreamEvent.Notice("응답이 지연되어 연결이 끊겼습니다. 이어서 생성합니다"))
+                    emit(AgentStreamEvent.Done(emptyList(), "timeout"))
+                    break
+                }
+                if (timeoutRetries >= MAX_TIMEOUT_RETRIES) throw e
+                timeoutRetries++
+                emit(
+                    AgentStreamEvent.Notice(
+                        "응답이 지연되어 다시 연결합니다 ($timeoutRetries/$MAX_TIMEOUT_RETRIES)",
+                    ),
+                )
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun streamAgentAttempts(
+        apiKey: String,
+        baseUrl: String,
+        model: String,
+        messages: List<ChatMessage>,
+        tools: List<ToolSpec>,
+        temperature: Double,
+        maxTokens: Int,
+        reasoningEffort: String?,
+        hasEmitted: () -> Boolean,
+        onEvent: suspend (AgentStreamEvent) -> Unit,
+    ) {
         var lastError: Exception? = null
         var finished = false
         var fellBack = false
@@ -653,8 +733,7 @@ class NimClient {
                     streamAgentOnce(
                         apiKey, baseUrl, model, messages, tools, temperature, tokens, effort,
                     ) { event ->
-                        emitted = true
-                        emit(event)
+                        onEvent(event)
                     }
                     finished = true
                     lastError = null
@@ -662,11 +741,11 @@ class NimClient {
                 } catch (c: CancellationException) {
                     throw c
                 } catch (e: NimApiException) {
-                    if (e.status !in RETRYABLE_STATUSES || emitted) throw e
+                    if (e.status !in RETRYABLE_STATUSES || hasEmitted()) throw e
                     lastError = e
                     if (effort != null && !fellBack) {
                         fellBack = true
-                        emit(
+                        onEvent(
                             AgentStreamEvent.Notice(
                                 "이 모델이 추론 강도를 지원하지 않아 기본값으로 다시 시도합니다",
                             ),
@@ -677,7 +756,7 @@ class NimClient {
             }
         }
         if (!finished) lastError?.let { throw it }
-    }.flowOn(Dispatchers.IO)
+    }
 
     private suspend fun streamAgentOnce(
         apiKey: String,
@@ -783,6 +862,7 @@ class NimClient {
 
     private companion object {
         val RETRYABLE_STATUSES = setOf(400, 422)
+        const val MAX_TIMEOUT_RETRIES = 1
     }
 
     private fun normalizeFinishReason(reason: String): String = when (reason) {

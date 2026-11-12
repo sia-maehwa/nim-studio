@@ -623,7 +623,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     persistApiHistory()
 
                     if (calls.isEmpty()) {
-                        if (finishReason == "length" &&
+                        if ((finishReason == "length" || finishReason == "timeout") &&
                             assistantText.isNotBlank() &&
                             autoContinues < MAX_AUTO_CONTINUES
                         ) {
