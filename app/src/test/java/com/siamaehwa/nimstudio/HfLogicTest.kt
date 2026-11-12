@@ -221,7 +221,7 @@ class HfLogicTest {
         val requestUrl =
             "https://router.huggingface.co/fal-ai/fal-ai/flux/dev?_subdomain=queue"
         val (status, result) = falQueueUrls(
-            "https://router.huggingface.co/fal-ai/fal-ai/flux/dev/requests/abc",
+            "https://queue.fal.run/fal-ai/flux/dev/requests/abc",
             requestUrl,
         )
         assertEquals(
