@@ -103,6 +103,18 @@ class NimRepository(
         )
     }
 
+    suspend fun complete(
+        model: String,
+        messages: List<ChatMessage>,
+        maxTokens: Int = 1024,
+        temperature: Double = 0.2,
+        reasoningEffort: String? = null,
+    ): String {
+        val key = store.apiKey.first() ?: throw MissingApiKeyException()
+        val base = store.baseUrl.first()
+        return client.complete(key, base, model, messages, temperature, maxTokens, reasoningEffort)
+    }
+
     fun stream(
         model: String,
         turns: List<ChatTurn>,

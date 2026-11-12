@@ -477,15 +477,18 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
             try {
                 for (step in 1..AgentUiState.MAX_STEPS) {
                     _state.update { it.copy(step = step) }
-                    val messages = listOf(
-                        ChatMessage(
-                            role = "system",
-                            content = textContent(systemPrompt(ws, rootListing)),
-                        ),
-                    ) + apiHistory
-                    val promptEstimate = TokenEstimator.estimate(
-                        messages.joinToString("\n") { it.content.asMessageText() },
+                    val systemMessage = ChatMessage(
+                        role = "system",
+                        content = textContent(systemPrompt(ws, rootListing)),
                     )
+                    var historyEstimate = estimateHistory(systemMessage)
+                    if (historyEstimate > CONTEXT_COMPACT_TOKENS) {
+                        if (compactHistory(model, reasoning)) {
+                            historyEstimate = estimateHistory(systemMessage)
+                        }
+                    }
+                    val messages = listOf(systemMessage) + apiHistory
+                    val promptEstimate = historyEstimate
                     _state.update {
                         it.copy(tokens = promptEstimate, tokensExact = false, tokensPerSecond = 0)
                     }
@@ -1065,6 +1068,75 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    private fun estimateHistory(systemMessage: ChatMessage): Int =
+        TokenEstimator.estimate(
+            (listOf(systemMessage) + apiHistory).joinToString("\n") {
+                it.content.asMessageText()
+            },
+        )
+
+    private suspend fun compactHistory(model: String, reasoningEffort: String?): Boolean {
+        if (apiHistory.size <= KEEP_RECENT_MESSAGES + 2) return false
+        var split = (apiHistory.size - KEEP_RECENT_MESSAGES).coerceAtLeast(0)
+        while (split < apiHistory.size && apiHistory[split].role != "user") split++
+        if (split >= apiHistory.size || split <= 0) return false
+
+        val old = apiHistory.take(split)
+        val recent = apiHistory.drop(split)
+        val serialized = serializeForSummary(old)
+        if (serialized.isBlank()) return false
+
+        val summary = try {
+            container.repository.complete(
+                model = model,
+                messages = listOf(
+                    ChatMessage("system", textContent(SUMMARY_SYSTEM_PROMPT)),
+                    ChatMessage("user", textContent("다음 기록을 요약하세요:\n\n$serialized")),
+                ),
+                maxTokens = SUMMARY_MAX_TOKENS,
+                temperature = 0.2,
+                reasoningEffort = reasoningEffort,
+            ).trim()
+        } catch (c: CancellationException) {
+            throw c
+        } catch (_: Exception) {
+            return false
+        }
+        if (summary.isBlank()) return false
+
+        val firstUser = old.firstOrNull { it.role == "user" }
+        apiHistory.clear()
+        if (firstUser != null) apiHistory.add(firstUser)
+        apiHistory.add(ChatMessage("user", textContent("[이전 대화 요약]\n$summary")))
+        apiHistory.addAll(recent)
+
+        persistApiHistory()
+        val notice = "컨텍스트 압축: 이전 기록 ${old.size}건을 요약했습니다"
+        addNotice(notice)
+        persist("notice", notice)
+        return true
+    }
+
+    private fun serializeForSummary(messages: List<ChatMessage>): String =
+        messages.joinToString("\n\n") { message ->
+            val text = message.content.asMessageText()
+            when {
+                message.role == "assistant" && message.toolCalls != null ->
+                    buildString {
+                        append("assistant(도구 호출): ")
+                        append(
+                            message.toolCalls.joinToString(", ") { call ->
+                                "${call.function.name} ${call.function.arguments.take(200)}"
+                            },
+                        )
+                        if (text.isNotBlank()) append("\n").append(text.take(400))
+                    }
+
+                message.role == "tool" -> "tool: ${text.take(400)}"
+                else -> "${message.role}: ${text.take(2000)}"
+            }
+        }.take(60_000)
+
     private suspend fun persistApiHistory() {
         val id = sessionId ?: return
         val sanitized = apiHistory.map { message ->
@@ -1136,6 +1208,14 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         const val MAX_API_JSON_CHARS = 400_000
         const val MAX_AGENT_TOKENS = 16384
         const val MAX_AUTO_CONTINUES = 4
+        const val CONTEXT_COMPACT_TOKENS = 20_000
+        const val KEEP_RECENT_MESSAGES = 10
+        const val SUMMARY_MAX_TOKENS = 1024
+        const val SUMMARY_SYSTEM_PROMPT =
+            "당신은 코딩 에이전트 세션 기록을 압축하는 역할입니다. " +
+                "사용자의 목표, 지금까지 한 일, 수정·생성한 파일 경로, 내린 결정, " +
+                "해결된 오류, 남은 작업을 빠뜨리지 말고 한국어로 간결하게 요약하세요. " +
+                "도구 호출 결과의 핵심만 남기고 원문 전체를 옮기지 마세요."
         const val CONTINUE_INSTRUCTION =
             "이어서 계속 작성해 주세요. 앞부분을 반복하지 말고 중단된 지점부터 " +
                 "바로 이어서 쓰세요."

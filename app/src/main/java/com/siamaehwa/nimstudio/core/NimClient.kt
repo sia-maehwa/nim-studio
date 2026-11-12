@@ -136,6 +136,59 @@ class NimClient {
             }
         }
 
+    suspend fun complete(
+        apiKey: String,
+        baseUrl: String,
+        model: String,
+        messages: List<ChatMessage>,
+        temperature: Double = 0.2,
+        maxTokens: Int = 1024,
+        reasoningEffort: String? = null,
+    ): String = withContext(Dispatchers.IO) {
+        var lastError: Exception? = null
+        for (effort in effortAttempts(reasoningEffort)) {
+            val payload = ChatRequest(
+                model = model,
+                messages = messages,
+                temperature = temperature,
+                topP = 0.95,
+                maxTokens = maxTokens,
+                stream = false,
+                reasoningEffort = effort,
+            )
+            val request = Request.Builder()
+                .url(normalizeBase(baseUrl) + "/chat/completions")
+                .header("Authorization", "Bearer $apiKey")
+                .header("Accept", "application/json")
+                .post(
+                    json.encodeToString(ChatRequest.serializer(), payload)
+                        .toRequestBody(jsonMedia),
+                )
+                .build()
+            try {
+                http.newCall(request).execute().use { response ->
+                    val bodyText = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) throw apiException(response.code, bodyText)
+                    val parsed = json.decodeFromString(
+                        ChatCompletionResponse.serializer(),
+                        bodyText,
+                    )
+                    return@withContext parsed.choices.firstOrNull()?.message?.content
+                        .asMessageText()
+                }
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: NimApiException) {
+                if (e.status in RETRYABLE_STATUSES && effort != null) {
+                    lastError = e
+                    continue
+                }
+                throw e
+            }
+        }
+        throw lastError ?: IOException("요청에 실패했습니다")
+    }
+
     fun streamChat(
         apiKey: String,
         baseUrl: String,
