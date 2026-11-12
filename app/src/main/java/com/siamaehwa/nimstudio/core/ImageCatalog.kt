@@ -7,6 +7,12 @@ enum class ImageFamily {
     Sd3,
 }
 
+enum class ImageSupport(val label: String) {
+    Verified("지원 확인"),
+    Unverified("검증되지 않음"),
+    Deprecated("지원 중단"),
+}
+
 data class ImageModelSpec(
     val id: String,
     val label: String,
@@ -16,6 +22,8 @@ data class ImageModelSpec(
     val cfgScale: Double? = null,
     val supportsNegative: Boolean = false,
     val squareOnly: Boolean = false,
+    val support: ImageSupport = ImageSupport.Verified,
+    val note: String? = null,
 )
 
 object ImageCatalog {
@@ -60,19 +68,29 @@ object ImageCatalog {
         ),
         ImageModelSpec(
             id = "stabilityai/stable-diffusion-3.5-large",
-            label = "Stable Diffusion 3.5 Large",
+            label = "Stable Diffusion 3.5 Large (지원 중단)",
             family = ImageFamily.Sd3,
             defaultSteps = 50,
             cfgScale = 3.5,
             supportsNegative = true,
+            support = ImageSupport.Deprecated,
+            note = "NVIDIA API 레퍼런스에 없는 모델입니다. 호출 시 404가 발생합니다.",
         ),
     )
+
+    /** 실제 NVIDIA API 문서에서 엔드포인트가 확인된 모델만 목록에 추가한다. */
+    val activeSpecs: List<ImageModelSpec> = specs.filter {
+        it.support != ImageSupport.Deprecated
+    }
 
     fun spec(id: String): ImageModelSpec? = specs.firstOrNull { it.id == id }
 
     fun label(id: String): String = spec(id)?.label ?: id
 
-    fun curatedModels(): List<NimModel> = specs.map { spec ->
+    fun support(id: String): ImageSupport =
+        spec(id)?.support ?: ImageSupport.Unverified
+
+    fun curatedModels(): List<NimModel> = activeSpecs.map { spec ->
         NimModel(
             id = spec.id,
             objectType = "model",
@@ -83,7 +101,8 @@ object ImageCatalog {
     fun merge(remote: List<NimModel>): List<NimModel> {
         val curated = curatedModels()
         val extras = remote.filter { model ->
-            ModelKinds.isLikelyImage(model.id) && specs.none { it.id == model.id }
+            ModelKinds.isLikelyImage(model.id) &&
+                specs.none { it.id == model.id }
         }
         return (curated + extras).distinctBy { it.id }
     }

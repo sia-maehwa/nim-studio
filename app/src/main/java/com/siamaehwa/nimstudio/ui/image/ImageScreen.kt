@@ -66,6 +66,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.siamaehwa.nimstudio.NimStudioApp
 import com.siamaehwa.nimstudio.core.ImageCatalog
+import com.siamaehwa.nimstudio.core.ImageSupport
 import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.ui.common.EmptyHint
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
@@ -91,6 +92,25 @@ fun ImageScreen(onOpenSettings: () -> Unit) {
                 onPick = vm::pickModel,
                 onRefresh = vm::refreshModels,
             )
+        }
+
+        val support = selectedSpec?.support
+        if (support != null && support != ImageSupport.Verified) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    text = selectedSpec.note
+                        ?: "이 모델은 실제 생성 지원이 확인되지 않았습니다. 404/422 오류가 날 수 있습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.padding(12.dp),
+                )
+            }
         }
 
         if (state.hasKey == false) {
@@ -192,7 +212,10 @@ fun ImageScreen(onOpenSettings: () -> Unit) {
 
             Button(
                 onClick = vm::generate,
-                enabled = !state.generating && state.prompt.isNotBlank() && state.selectedModel != null,
+                enabled = !state.generating &&
+                    state.prompt.isNotBlank() &&
+                    state.selectedModel != null &&
+                    selectedSpec?.support != ImageSupport.Deprecated,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),

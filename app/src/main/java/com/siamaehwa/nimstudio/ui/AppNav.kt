@@ -3,6 +3,7 @@ package com.siamaehwa.nimstudio.ui
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Memory
@@ -25,6 +26,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.siamaehwa.nimstudio.ui.agent.AgentScreen
 import com.siamaehwa.nimstudio.ui.chat.ChatScreen
+import com.siamaehwa.nimstudio.ui.hf.HfScreen
 import com.siamaehwa.nimstudio.ui.image.ImageScreen
 import com.siamaehwa.nimstudio.ui.library.LibraryScreen
 import com.siamaehwa.nimstudio.ui.models.ModelsScreen
@@ -41,6 +43,7 @@ private val destinations = listOf(
     Destination("agent", "에이전트", Icons.Filled.SmartToy),
     Destination("image", "이미지", Icons.Filled.Image),
     Destination("models", "모델", Icons.Filled.Memory),
+    Destination("hf", "Hugging Face", Icons.Filled.Cloud),
     Destination("library", "라이브러리", Icons.Filled.Folder),
     Destination("settings", "설정", Icons.Filled.Settings),
 )
@@ -93,6 +96,9 @@ fun AppRoot() {
             }
             composable("models") {
                 ModelsScreen(onOpenChat = { navController.switchTab("chat") })
+            }
+            composable("hf") {
+                HfScreen()
             }
             composable("library") {
                 LibraryScreen()

@@ -354,55 +354,72 @@ class NimClient {
         params: ImageGenParams,
     ): List<GeneratedImage> = withContext(Dispatchers.IO) {
         val spec = ImageCatalog.spec(params.model)
+        if (spec?.support == ImageSupport.Deprecated) {
+            throw NimApiException(
+                status = 404,
+                title = "지원 중단된 모델",
+                detail = spec.note,
+                friendly = "이 모델은 NVIDIA API에서 더 이상 제공되지 않습니다(404). " +
+                    "다른 이미지 모델을 선택하세요.",
+            )
+        }
         var lastError: Exception? = null
-        for (attempt in imageAttempts(baseUrl, params, spec)) {
-            val request = Request.Builder()
-                .url(attempt.url)
-                .header("Authorization", "Bearer $apiKey")
-                .header("Accept", "application/json")
-                .post(attempt.payload.toRequestBody(jsonMedia))
-                .build()
-            val call = http.newCall(request)
-            coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
-            try {
-                call.execute().use { response ->
-                    val bodyText = response.body?.string().orEmpty()
-                    if (!response.isSuccessful) throw apiException(response.code, bodyText)
-                    return@withContext parseImageResponse(bodyText)
+        for (urlAttempt in imageAttempts(baseUrl, params, spec)) {
+            for (payload in urlAttempt.payloads) {
+                val request = Request.Builder()
+                    .url(urlAttempt.url)
+                    .header("Authorization", "Bearer $apiKey")
+                    .header("Accept", "application/json")
+                    .post(payload.toRequestBody(jsonMedia))
+                    .build()
+                val call = http.newCall(request)
+                coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
+                try {
+                    call.execute().use { response ->
+                        val body = response.body
+                        val length = body?.contentLength() ?: -1L
+                        if (length > MAX_IMAGE_RESPONSE_BYTES) {
+                            throw IOException("이미지 응답이 너무 큽니다")
+                        }
+                        val bodyText = body?.string().orEmpty()
+                        if (!response.isSuccessful) throw apiException(response.code, bodyText)
+                        return@withContext parseImageResponse(bodyText)
+                    }
+                } catch (c: CancellationException) {
+                    throw c
+                } catch (e: NimApiException) {
+                    lastError = e
+                    // 404/405: 이 URL 자체가 없음 → 같은 URL을 payload만 바꿔 재시도하지 않는다.
+                    if (e.status == 404 || e.status == 405) break
+                    // 400/422: 요청 스키마 불일치 → 같은 URL에서 다른 payload로 재시도한다.
+                    if (e.status == 400 || e.status == 422) continue
+                    throw e
+                } catch (t: Exception) {
+                    throw t
                 }
-            } catch (c: CancellationException) {
-                throw c
-            } catch (t: Exception) {
-                lastError = t
-                val retryable = t is NimApiException &&
-                    t.status in setOf(400, 404, 405, 422)
-                if (!retryable) throw t
             }
         }
         throw lastError ?: IOException("이미지 생성 요청에 실패했습니다")
     }
 
-    private data class ImageAttempt(val url: String, val payload: String)
+    private data class ImageUrlAttempt(val url: String, val payloads: List<String>)
 
     private fun imageAttempts(
         baseUrl: String,
         params: ImageGenParams,
         spec: ImageModelSpec?,
-    ): List<ImageAttempt> {
+    ): List<ImageUrlAttempt> {
         val base = normalizeBase(baseUrl)
         val ladder = genaiPayloadLadder(params, spec)
         if (base.contains("api.nvidia.com")) {
             val url = "https://ai.api.nvidia.com/v1/genai/${params.model}"
-            return ladder.map { ImageAttempt(url, it) }
+            return listOf(ImageUrlAttempt(url, ladder))
         }
         return listOf(
-            ImageAttempt("$base/images/generations", openAiImagesPayload(params)),
-        ) + ladder.flatMap { payload ->
-            listOf(
-                ImageAttempt("$base/genai/${params.model}", payload),
-                ImageAttempt("$base/infer", payload),
-            )
-        }
+            ImageUrlAttempt("$base/images/generations", listOf(openAiImagesPayload(params))),
+            ImageUrlAttempt("$base/genai/${params.model}", ladder),
+            ImageUrlAttempt("$base/infer", ladder),
+        )
     }
 
     private fun genaiPayloadLadder(
@@ -863,6 +880,7 @@ class NimClient {
     private companion object {
         val RETRYABLE_STATUSES = setOf(400, 422)
         const val MAX_TIMEOUT_RETRIES = 1
+        const val MAX_IMAGE_RESPONSE_BYTES = 25_000_000L
     }
 
     private fun normalizeFinishReason(reason: String): String = when (reason) {

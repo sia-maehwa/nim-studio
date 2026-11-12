@@ -1,6 +1,7 @@
 # NIM Studio
 
-NVIDIA NIM(https://build.nvidia.com)을 폰에서 편하게 쓰기 위한 Android 앱입니다.
+NVIDIA NIM(https://build.nvidia.com)과 Hugging Face Inference Providers를
+폰에서 편하게 쓰기 위한 Android 앱입니다.
 채팅·이미지 생성·모델 테스트·산출물 라이브러리를 한 곳에서 다룹니다.
 
 ## 설치
@@ -36,7 +37,13 @@ https://github.com/sia-maehwa/nim-studio/releases/download/rolling-latest/app-re
    알림으로 알려줍니다. 설정 → 터미널 실행에서 전체 파일 접근을 허용하면 Termux 없이도
    `run_command`로 셸 명령(ls·grep·sed·find 등)을 실행합니다. 빌드·컴파일 도구(JDK·git·node)는
    기기에 없어 지원하지 않습니다.
-7. **플러그인**: 설정 → 에이전트 플러그인에서 JSON 매니페스트로 HTTP 도구를 추가하면 에이전트가 호출합니다.
+7. **Hugging Face**: 하단 **Hugging Face** 탭에서 HF 토큰(`hf_...`)을 등록하면
+   Inference Providers로 채팅·이미지 생성이 가능합니다. 모델 탐색 탭은 HF Hub를 검색해
+   실행 가능(Provider live)·Provider 미지원·Gated·배포 필요 상태를 구분해 보여주고,
+   Provider를 골라 채팅/이미지에 바로 사용할 수 있습니다. 전용 Inference Endpoint
+   (TGI/TEI, OpenAI 호환 또는 HF 네이티브)도 연결 설정 탭에서 등록·테스트할 수 있습니다.
+   HF 토큰은 NIM 키와 분리된 Keystore 별칭으로 암호화됩니다.
+8. **플러그인**: 설정 → 에이전트 플러그인에서 JSON 매니페스트로 HTTP 도구를 추가하면 에이전트가 호출합니다.
 
 ## 빌드
 
@@ -59,9 +66,10 @@ nim-studio/
    ├─ MainActivity.kt
    ├─ core/                        NIM API 클라이언트·보안 저장소·오류 진단
    ├─ core/agent/                  SAF 작업 폴더·경로 보호·파일 도구(tool-calling)
+   ├─ core/hf/                     Hugging Face Hub 검색·Inference Providers/Endpoint 클라이언트
    ├─ core/plugin/                 JSON 플러그인(HTTP 도구) 저장·실행
    ├─ core/db/                     Room (대화·메시지·라이브러리·에이전트 기록)
-   └─ ui/                          Compose 화면 (채팅·에이전트·이미지·모델·라이브러리·설정)
+   └─ ui/                          Compose 화면 (채팅·에이전트·이미지·모델·HF·라이브러리·설정)
 ```
 
 ## 기능 현황
@@ -98,14 +106,18 @@ nim-studio/
 | 스트림 정지 감지 (120초 무응답 시 자동 중단·오류 표시) | M7 |
 | 에이전트 컨텍스트 자동 압축 (입력이 약 20k 토큰에 도달하면 이전 기록을 요약·축약, opencode 방식) | M8 |
 | 인앱 셸 실행 (run_command: Android toybox, Termux 불필요, 설정에서 전체 파일 접근 허용 필요, 빌드 도구는 없음) | M9 |
+| NVIDIA 이미지 모델 404 수정 (문서에 없는 SD 3.5 Large를 지원 중단으로 표시·목록 제외, 404 시 payload 재시도 중단) | M10 |
+| Hugging Face 전용 화면 (Hub 검색, 실행 가능/Provider 미지원/Gated/배포 필요 구분, Provider 선택 채팅·이미지 생성, Endpoint/Custom GPU 연결, 라이브러리 자동 저장) | M10 |
 
 ## 보안
 
 - API 키는 기기 안에서 Android Keystore(AES-GCM)로 암호화되어 저장됩니다.
-- 키는 NIM API 호출 외 어디에도 전송·기록되지 않습니다.
+  Hugging Face 토큰은 NIM 키와 분리된 Keystore 별칭으로 저장됩니다.
+- 키·토큰은 각 API 호출 외 어디에도 전송·기록되지 않습니다.
 - `signing/`의 키스토어는 개인용 앱 업데이트 서명용입니다. 공개 저장소에 포함되어 있으므로
   이 키로 서명된 APK를 신뢰할 때는 저장소 빌드 산출물인지 확인하세요.
 - 에이전트는 사용자가 고른 폴더 밖으로 나가지 않으며(`..`·절대 경로 차단),
-  `.git`, `build`, `node_modules` 등 보호 폴더는 수정하지 않습니다. 셸 실행 기능은 없습니다.
+  `.git`, `build`, `node_modules` 등 보호 폴더는 수정하지 않습니다.
+  `run_command`는 사용자가 설정에서 전체 파일 접근을 허용한 경우에만 동작합니다.
 - 플러그인은 사용자가 직접 붙여넣은 HTTP 도구만 실행하며, 파일·셸에는 접근하지 않습니다.
   등록한 URL로 요청이 나가므로 신뢰하는 매니페스트만 추가하세요.

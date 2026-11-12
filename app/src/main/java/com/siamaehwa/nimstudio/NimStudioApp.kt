@@ -10,6 +10,9 @@ import com.siamaehwa.nimstudio.core.NimRepository
 import com.siamaehwa.nimstudio.core.NimStore
 import com.siamaehwa.nimstudio.core.db.AgentHistoryRepository
 import com.siamaehwa.nimstudio.core.db.AppDatabase
+import com.siamaehwa.nimstudio.core.hf.HfClient
+import com.siamaehwa.nimstudio.core.hf.HfRepository
+import com.siamaehwa.nimstudio.core.hf.HfStore
 import com.siamaehwa.nimstudio.core.plugin.PluginRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +72,9 @@ class AppContainer(application: Application) {
     val database = AppDatabase.build(application)
     val conversations = database.conversationDao()
     val library = LibraryRepository(application, database.libraryDao())
+    val hfStore = HfStore(application)
+    val hfClient = HfClient()
+    val hfRepository = HfRepository(hfStore, hfClient, library)
     val agentHistory = AgentHistoryRepository(database.agentHistoryDao())
     val plugins = PluginRepository(application)
 }
