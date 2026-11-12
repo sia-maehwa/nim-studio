@@ -687,7 +687,21 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
             runCatching {
-                repository.testEndpoint(config, endpointToken ?: currentToken)
+                if (config.task == HfTask.TextToImage) {
+                    val bytes = repository.endpointGenerateImage(
+                        config = config,
+                        token = endpointToken ?: currentToken,
+                        prompt = "a simple red circle on white background",
+                        negativePrompt = "",
+                        width = 512,
+                        height = 512,
+                        steps = 4,
+                        seed = null,
+                    )
+                    "이미지 Endpoint 응답 확인 완료 (${bytes.size} bytes)"
+                } else {
+                    repository.testEndpoint(config, endpointToken ?: currentToken)
+                }
             }
                 .onSuccess { message ->
                     _state.update {

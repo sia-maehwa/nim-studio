@@ -42,6 +42,10 @@ object HfErrors {
                 "Hugging Face 토큰이 유효하지 않거나 권한이 없습니다(401). " +
                     "설정에서 토큰을 다시 확인하세요.$suffix"
 
+            status == 402 ->
+                "결제/크레딧 오류(402): Inference Providers 무료 크레딧이 " +
+                    "소진되었을 수 있습니다. 잠시 후 다시 시도하거나 Provider를 바꾸세요.$suffix"
+
             status == 403 ->
                 "권한 없음(403): Gated 모델 동의 여부와 토큰의 " +
                     "'Make calls to Inference Providers' 권한을 확인하세요.$suffix"
@@ -393,6 +397,7 @@ class HfClient {
             }
             val source = response.body?.source() ?: throw IOException("응답 본문이 비어 있습니다")
             var reason: String? = null
+            var nativeEmitted = false
             while (true) {
                 coroutineContext.ensureActive()
                 val line = source.readUtf8Line() ?: break
@@ -404,11 +409,12 @@ class HfClient {
                     }.getOrNull() ?: continue
                     chunk.error?.let { throw HfApiException(500, HfErrors.sanitize(it)) }
                     chunk.token?.text?.takeIf { it.isNotEmpty() }?.let {
+                        nativeEmitted = true
                         emit(HfChatEvent.Content(it))
                     }
-                    chunk.generatedText?.takeIf { it.isNotEmpty() }?.let {
-                        emit(HfChatEvent.Content(it))
-                    }
+                    chunk.generatedText
+                        ?.takeIf { it.isNotEmpty() && !nativeEmitted }
+                        ?.let { emit(HfChatEvent.Content(it)) }
                 } else {
                     val chunk = runCatching {
                         json.decodeFromString(HfChunk.serializer(), data)
