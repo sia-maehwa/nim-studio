@@ -34,11 +34,15 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -53,6 +57,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.siamaehwa.nimstudio.BuildConfig
 import com.siamaehwa.nimstudio.NimStudioApp
 import com.siamaehwa.nimstudio.core.KeyFormat
+import com.siamaehwa.nimstudio.core.ShellAccess
 import com.siamaehwa.nimstudio.ui.common.ScreenHeader
 
 @Composable
@@ -259,6 +264,60 @@ fun SettingsScreen() {
                             checked = state.keepAlive,
                             onCheckedChange = vm::setKeepAlive,
                         )
+                    }
+                }
+            }
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("터미널 실행", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "에이전트가 run_command 도구로 셸 명령(ls, grep, sed 등)을 실행하려면 " +
+                            "전체 파일 접근 권한이 필요합니다. Termux 없이도 파일·텍스트 작업이 가능하며, " +
+                            "JDK·git은 없어 빌드/컴파일은 되지 않습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val context = LocalContext.current
+                    var shellGranted by remember {
+                        mutableStateOf(ShellAccess.hasStorageAccess(context))
+                    }
+                    val lifecycleOwner = LocalLifecycleOwner.current
+                    DisposableEffect(lifecycleOwner) {
+                        val observer = LifecycleEventObserver { _, event ->
+                            if (event == Lifecycle.Event.ON_RESUME) {
+                                shellGranted = ShellAccess.hasStorageAccess(context)
+                            }
+                        }
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (shellGranted) "허용됨" else "허용되지 않음",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (shellGranted) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (!shellGranted) {
+                            TextButton(
+                                onClick = {
+                                    val intent = ShellAccess.settingsIntent(context)
+                                    if (intent != null) {
+                                        runCatching { context.startActivity(intent) }
+                                    }
+                                },
+                            ) {
+                                Text("권한 열기")
+                            }
+                        }
                     }
                 }
             }

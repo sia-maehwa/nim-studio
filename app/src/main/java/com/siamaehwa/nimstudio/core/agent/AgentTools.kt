@@ -79,6 +79,14 @@ class AgentTools(private val workspace: Workspace) {
                 },
             ),
             tool(
+                name = "run_command",
+                description = "작업 폴더에서 셸 명령을 실행합니다(Android toybox: ls, grep, sed, find, head, wc 등). JDK·git·node는 없어 빌드/컴파일은 불가합니다.",
+                required = listOf("command"),
+                params = {
+                    str("command", "실행할 셸 명령")
+                },
+            ),
+            tool(
                 name = "web_search",
                 description = "최신 뉴스·시사·근황 등 지식 컷오프 이후 정보가 필요할 때 웹을 검색합니다.",
                 required = listOf("query"),

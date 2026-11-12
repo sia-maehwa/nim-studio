@@ -3,6 +3,7 @@ package com.siamaehwa.nimstudio.core.agent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
 import android.provider.DocumentsContract
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -35,11 +36,31 @@ class Workspace private constructor(
     var fileCount: Int = 0
         private set
 
+    /** /storage/... 절대 경로. 매핑할 수 없으면 null(셸 실행 불가). */
+    var fsPath: String?
+        private set
+
     companion object {
         private const val MAX_NODES = 3000
         private const val MAX_DEPTH = 10
         private const val MAX_READ_BYTES = 200_000
         private const val MAX_SEARCH_BYTES = 6_000_000L
+
+        fun resolveFsPath(uri: Uri): String? = runCatching {
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            val volume = docId.substringBefore(':', "")
+            val relative = docId.substringAfter(':', "")
+            val base = when {
+                volume.equals("primary", ignoreCase = true) ->
+                    Environment.getExternalStorageDirectory().absolutePath
+
+                volume.matches(Regex("[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}")) ->
+                    "/storage/$volume"
+
+                else -> return@runCatching null
+            }
+            if (relative.isBlank()) base else "$base/$relative"
+        }.getOrNull()
 
         fun open(context: Context, uri: Uri): Workspace {
             runCatching {
@@ -48,7 +69,9 @@ class Workspace private constructor(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                 )
             }
-            return Workspace(context, uri)
+            val workspace = Workspace(context, uri)
+            workspace.fsPath = resolveFsPath(uri)
+            return workspace
         }
     }
 

@@ -17,10 +17,12 @@ import com.siamaehwa.nimstudio.core.NimErrors
 import com.siamaehwa.nimstudio.core.NimModel
 import com.siamaehwa.nimstudio.core.Notifier
 import com.siamaehwa.nimstudio.core.ReasoningEffort
+import com.siamaehwa.nimstudio.core.ShellAccess
 import com.siamaehwa.nimstudio.core.TokenEstimator
 import com.siamaehwa.nimstudio.core.ToolCall
 import com.siamaehwa.nimstudio.core.ToolCallFunction
 import com.siamaehwa.nimstudio.core.agent.AgentTools
+import com.siamaehwa.nimstudio.core.agent.ShellRunner
 import com.siamaehwa.nimstudio.core.agent.ToolOutcome
 import com.siamaehwa.nimstudio.core.agent.UndoInfo
 import com.siamaehwa.nimstudio.core.agent.Workspace
@@ -334,9 +336,16 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         banner = null,
                     )
                 }
+                val terminal = if (
+                    ws.fsPath != null && ShellAccess.hasStorageAccess(container.appContext)
+                ) {
+                    " · 터미널 사용 가능"
+                } else {
+                    ""
+                }
                 addNotice(
                     "작업 폴더: ${ws.name} (${ws.fileCount}개 파일" +
-                        (if (ws.truncated) ", 일부 생략" else "") + ")",
+                        (if (ws.truncated) ", 일부 생략" else "") + ")$terminal",
                 )
             } catch (c: CancellationException) {
                 throw c
@@ -479,7 +488,9 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                     _state.update { it.copy(step = step) }
                     val systemMessage = ChatMessage(
                         role = "system",
-                        content = textContent(systemPrompt(ws, rootListing)),
+                        content = textContent(
+                            systemPrompt(ws, rootListing, shellAvailable()),
+                        ),
                     )
                     var historyEstimate = estimateHistory(systemMessage)
                     if (historyEstimate > CONTEXT_COMPACT_TOKENS) {
@@ -673,6 +684,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         val gated = call.name in GATED_TOOLS || pluginTool != null
                         val permissionMode = _state.value.permission
                         val outcome = when {
+                            call.name == "run_command" -> handleRunCommand(call)
                             call.name == "web_search" -> handleWebSearch(call)
                             call.name == "ask_user" -> handleAskUser(call)
                             call.name == "todo_write" -> handleTodoWrite(call)
@@ -788,6 +800,59 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         } finally {
             questionDeferred = null
             _state.update { it.copy(pendingQuestion = null) }
+        }
+    }
+
+    private fun shellAvailable(): Boolean =
+        workspace?.fsPath != null && ShellAccess.hasStorageAccess(container.appContext)
+
+    private suspend fun handleRunCommand(call: AgentToolCall): ToolOutcome {
+        val args = parseArgs(call.arguments)
+        val command = (args?.get("command") as? JsonPrimitive)?.contentOrNull?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return ToolOutcome(
+                summary = "run_command · 오류",
+                detail = "command가 필요합니다",
+                result = "ERROR: command 파라미터가 필요합니다",
+                isError = true,
+            )
+        val dir = workspace?.fsPath
+            ?: return ToolOutcome(
+                summary = "run_command · 불가",
+                detail = "이 작업 폴더는 절대 경로로 변환할 수 없어 셸을 실행할 수 없습니다",
+                result = "ERROR: 이 폴더에서는 명령 실행을 지원하지 않습니다. " +
+                    "기기 저장소(내부 저장소) 폴더를 선택하세요.",
+                isError = true,
+            )
+        if (!ShellAccess.hasStorageAccess(container.appContext)) {
+            return ToolOutcome(
+                summary = "run_command · 권한 필요",
+                detail = "설정에서 '터미널 실행' 권한을 허용해야 합니다",
+                result = "ERROR: 셸 실행 권한이 없습니다. 설정 → 터미널 실행에서 " +
+                    "전체 파일 접근을 허용하세요.",
+                isError = true,
+            )
+        }
+        return try {
+            val result = ShellRunner.run(dir, command)
+            ToolOutcome(
+                summary = "run_command · exit ${result.exitCode}",
+                detail = result.output.take(1500).ifBlank { "(출력 없음)" },
+                result = buildString {
+                    append("exit code: ").append(result.exitCode).append('\n')
+                    append(result.output)
+                },
+                isError = result.exitCode != 0,
+            )
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Exception) {
+            ToolOutcome(
+                summary = "run_command · 오류",
+                detail = t.message ?: "명령 실행 실패",
+                result = "ERROR: ${t.message ?: "명령 실행 실패"}",
+                isError = true,
+            )
         }
     }
 
@@ -923,7 +988,11 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun systemPrompt(workspace: Workspace, rootListing: String): String = buildString {
+    private fun systemPrompt(
+        workspace: Workspace,
+        rootListing: String,
+        shellAvailable: Boolean,
+    ): String = buildString {
         appendLine("당신은 NIM Studio의 코딩 에이전트입니다. Android 기기의 SAF로 허용된 프로젝트 폴더에서 파일을 읽고 수정합니다.")
         appendLine("오늘 날짜: ${ClockInfo.todayLabel()}")
         appendLine("작업 폴더: ${workspace.name}")
@@ -935,7 +1004,15 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         appendLine("- 여러 단계 작업은 todo_write로 계획을 세우고, 진행할 때마다 전체 목록을 갱신하세요.")
         appendLine("- 최신 뉴스·시사·근황처럼 지식 컷오프 이후 정보가 필요하면 web_search 도구로 검색하세요.")
         appendLine("- 사용자 결정이 필요하면 ask_user로 질문하세요. 선택지를 options에 넣으면 버튼으로 표시됩니다.")
-        appendLine("- 셸/터미널은 없습니다. 빌드·실행은 사용자가 Termux에서 직접 합니다.")
+        if (shellAvailable) {
+            appendLine(
+                "- run_command로 셸 명령을 실행할 수 있습니다(Android 기본 toybox: ls, grep, " +
+                    "sed, find, head, wc 등). JDK·git·node는 없어 빌드/컴파일은 불가합니다.",
+            )
+            appendLine("- 셸로 파일을 고치기보다 read_file/edit_file/write_file 도구를 우선 사용하세요.")
+        } else {
+            appendLine("- 셸/터미널을 쓸 수 없습니다. 빌드·실행은 사용자가 Termux에서 직접 합니다.")
+        }
         appendLine("- 요청이 모호하면 한 번만 짧게 되물어보세요.")
         appendLine("- 답변은 한국어로 간결하게. 작업 후 바꾼 파일을 요약하세요.")
         appendLine("- .git, build, node_modules 등 보호된 폴더는 수정할 수 없습니다.")
@@ -1219,6 +1296,6 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
         const val CONTINUE_INSTRUCTION =
             "이어서 계속 작성해 주세요. 앞부분을 반복하지 말고 중단된 지점부터 " +
                 "바로 이어서 쓰세요."
-        val GATED_TOOLS = setOf("write_file", "edit_file")
+        val GATED_TOOLS = setOf("write_file", "edit_file", "run_command")
     }
 }
