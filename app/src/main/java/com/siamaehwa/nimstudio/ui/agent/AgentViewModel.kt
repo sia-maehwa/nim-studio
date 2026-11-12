@@ -624,8 +624,7 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
 
                     if (calls.isEmpty()) {
                         if ((finishReason == "length" || finishReason == "timeout") &&
-                            assistantText.isNotBlank() &&
-                            autoContinues < MAX_AUTO_CONTINUES
+                            assistantText.isNotBlank()
                         ) {
                             autoContinues++
                             apiHistory.add(
@@ -635,16 +634,15 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                                 ),
                             )
                             persistApiHistory()
-                            val notice = "토큰 한도로 잘려 자동으로 이어서 생성합니다 " +
-                                "($autoContinues/$MAX_AUTO_CONTINUES)"
+                            val notice = "응답이 잘려 자동으로 이어서 생성합니다 " +
+                                "(${autoContinues}회)"
                             addNotice(notice)
                             persist("notice", notice)
                             continue
                         }
                         if (finishReason != "stop") {
                             val notice = if (finishReason == "length") {
-                                "자동 이어쓰기 한도(${MAX_AUTO_CONTINUES}회)에 도달했습니다. " +
-                                    "'계속'을 입력하면 더 이어갑니다."
+                                "응답이 비어 있어 이어쓰기를 멈췄습니다. '계속'을 입력하세요."
                             } else {
                                 "연결이 끊겨 응답이 중단되었습니다. 다시 요청하거나 '계속'을 입력하세요."
                             }
@@ -1272,7 +1270,6 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
     private companion object {
         const val MAX_API_JSON_CHARS = 400_000
         const val MAX_AGENT_TOKENS = 16384
-        const val MAX_AUTO_CONTINUES = 4
         const val CONTEXT_COMPACT_TOKENS = 20_000
         const val KEEP_RECENT_MESSAGES = 10
         const val SUMMARY_MAX_TOKENS = 1024
