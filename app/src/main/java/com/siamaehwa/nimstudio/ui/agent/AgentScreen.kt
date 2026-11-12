@@ -249,7 +249,7 @@ fun AgentScreen(onOpenSettings: () -> Unit) {
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "작업 중… 단계 ${state.step}/${state.maxSteps}" +
+                            "작업 중… 단계 ${state.step}" +
                                 if (state.tokens > 0) {
                                     " · ${tokenLabel(state.tokens, state.tokensExact, state.tokensPerSecond)}"
                                 } else {

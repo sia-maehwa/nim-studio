@@ -107,7 +107,6 @@ data class AgentUiState(
     val attachmentsLoading: Boolean = false,
     val running: Boolean = false,
     val step: Int = 0,
-    val maxSteps: Int = MAX_STEPS,
     val tokens: Int = 0,
     val tokensExact: Boolean = false,
     val tokensPerSecond: Int = 0,
@@ -118,11 +117,7 @@ data class AgentUiState(
     val history: List<AgentSessionSummary> = emptyList(),
     val historyView: AgentHistoryView? = null,
     val banner: String? = null,
-) {
-    companion object {
-        const val MAX_STEPS = 24
-    }
-}
+)
 
 private val TODO_STATUSES = setOf("pending", "in_progress", "completed", "cancelled")
 
@@ -479,12 +474,13 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                 ?.take(40)
                 ?.joinToString(", ") { if (it.isDir) it.name + "/" else it.name }
                 .orEmpty()
-            var completed = false
             var autoContinues = 0
+            var step = 0
             var activeCalls: List<AgentToolCall> = emptyList()
             val responded = mutableSetOf<String>()
             try {
-                for (step in 1..AgentUiState.MAX_STEPS) {
+                while (true) {
+                    step++
                     _state.update { it.copy(step = step) }
                     val systemMessage = ChatMessage(
                         role = "system",
@@ -655,7 +651,6 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                             addNotice(notice)
                             persist("notice", notice)
                         }
-                        completed = true
                         Notifier.completed(
                             container.appContext,
                             "작업 완료: ${displayText.take(60)}",
@@ -735,13 +730,6 @@ class AgentViewModel(private val container: AppContainer) : ViewModel() {
                         responded.add(call.id)
                     }
                     persistApiHistory()
-                }
-                if (!completed) {
-                    val notice = "최대 단계(${AgentUiState.MAX_STEPS})에 도달했습니다. " +
-                        "계속하려면 다시 요청하세요."
-                    addNotice(notice)
-                    persist("notice", notice)
-                    Notifier.completed(container.appContext, notice)
                 }
             } catch (c: CancellationException) {
                 respondMissing(activeCalls, responded)
