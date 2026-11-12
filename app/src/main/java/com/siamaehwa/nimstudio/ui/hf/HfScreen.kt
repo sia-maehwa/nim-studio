@@ -3,6 +3,8 @@
 package com.siamaehwa.nimstudio.ui.hf
 
 import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -185,7 +187,12 @@ private fun ExploreTab(state: HfUiState, vm: HfViewModel) {
                 onClick = vm::toggleAvailableOnly,
                 label = { Text("실행 가능만") },
             )
-            listOf("all" to "전체", "chat" to "채팅", "image" to "이미지").forEach { (id, label) ->
+            listOf(
+                "all" to "전체",
+                "chat" to "채팅",
+                "image" to "이미지",
+                "edit" to "이미지 편집",
+            ).forEach { (id, label) ->
                 FilterChip(
                     selected = state.taskFilter == id,
                     onClick = { vm.setTaskFilter(id) },
@@ -238,7 +245,8 @@ private fun ExploreTab(state: HfUiState, vm: HfViewModel) {
         val filtered = state.results.filter { model ->
             when (state.taskFilter) {
                 "chat" -> model.task == HfTask.Chat
-                "image" -> model.task == HfTask.TextToImage
+                "image" -> model.task == HfTask.TextToImage || model.task == HfTask.ImageToImage
+                "edit" -> model.task == HfTask.ImageToImage
                 else -> true
             }
         }
@@ -475,7 +483,7 @@ private fun ChatTab(state: HfUiState, vm: HfViewModel) {
                     if (state.useEndpoint) {
                         "Endpoint 사용 중"
                     } else {
-                        "Provider: ${state.chatProvider ?: "없음"}"
+                        "Provider: ${state.chatProvider ?: "자동"}"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -486,6 +494,7 @@ private fun ChatTab(state: HfUiState, vm: HfViewModel) {
                     providers = state.chatProviders,
                     selected = state.chatProvider,
                     onPick = vm::setChatProvider,
+                    allowAuto = true,
                 )
             }
             IconButton(onClick = vm::clearChat) {
@@ -603,14 +612,24 @@ private fun ProviderMenu(
     providers: List<String>,
     selected: String?,
     onPick: (String) -> Unit,
+    allowAuto: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         TextButton(onClick = { expanded = true }) {
-            Text(selected ?: "Provider")
+            Text(selected ?: if (allowAuto) "자동" else "Provider")
             Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (allowAuto) {
+                DropdownMenuItem(
+                    text = { Text("자동 (가장 빠른 Provider)") },
+                    onClick = {
+                        expanded = false
+                        onPick("")
+                    },
+                )
+            }
             providers.forEach { provider ->
                 DropdownMenuItem(
                     text = { Text(provider) },
@@ -626,12 +645,22 @@ private fun ProviderMenu(
 
 @Composable
 private fun ImageTab(state: HfUiState, vm: HfViewModel) {
+    val context = LocalContext.current
+    val referencePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val bytes = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+        vm.setReferenceImage(bytes)
+    }
     if (!state.imageReady && !state.useEndpoint) {
         EmptyHint(
             icon = Icons.Filled.Image,
             title = "이미지 모델을 선택하세요",
-            body = "모델 탐색 탭에서 텍스트→이미지 모델을 고르세요. " +
-                "hf-inference와 fal-ai Provider를 지원합니다.",
+            body = "모델 탐색 탭에서 텍스트→이미지 또는 이미지 편집 모델을 고르세요. " +
+                "hf-inference와 fal-ai Provider를 지원하며, 참조 이미지 편집은 fal-ai만 지원합니다.",
             actionLabel = "모델 탐색",
             onAction = { vm.setTab(0) },
         )
@@ -656,7 +685,8 @@ private fun ImageTab(state: HfUiState, vm: HfViewModel) {
                     if (state.useEndpoint) {
                         "Endpoint 사용 중"
                     } else {
-                        "Provider: ${state.imageProvider ?: "없음"}"
+                        "Provider: ${state.imageProvider ?: "없음"} · " +
+                            HfTask.fromId(state.imageTaskId).label
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -707,6 +737,40 @@ private fun ImageTab(state: HfUiState, vm: HfViewModel) {
             label = { Text("네거티브 프롬프트 (선택)") },
         )
 
+        if (!state.useEndpoint && state.imageNeedsReference) {
+            Spacer(Modifier.height(10.dp))
+            Text("참조 이미지 (필수)", style = MaterialTheme.typography.labelLarge)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = 4.dp),
+            ) {
+                val reference = state.referenceImage
+                if (reference != null) {
+                    val bitmap = remember(reference) {
+                        runCatching {
+                            BitmapFactory.decodeByteArray(reference, 0, reference.size)
+                                ?.asImageBitmap()
+                        }.getOrNull()
+                    }
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap,
+                            contentDescription = "참조 이미지",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(88.dp)
+                                .clip(RoundedCornerShape(10.dp)),
+                        )
+                    }
+                    TextButton(onClick = vm::clearReferenceImage) { Text("삭제") }
+                }
+                OutlinedButton(onClick = { referencePicker.launch("image/*") }) {
+                    Text(if (reference == null) "이미지 선택" else "이미지 변경")
+                }
+            }
+        }
+
         Spacer(Modifier.height(10.dp))
         Text("크기", style = MaterialTheme.typography.labelLarge)
         Row(
@@ -750,7 +814,9 @@ private fun ImageTab(state: HfUiState, vm: HfViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(
                 onClick = vm::generateImage,
-                enabled = !state.generating && state.imagePrompt.isNotBlank(),
+                enabled = !state.generating && state.imagePrompt.isNotBlank() &&
+                    (!state.imageNeedsReference || state.useEndpoint ||
+                        state.referenceImage != null),
                 modifier = Modifier.weight(1f),
             ) {
                 if (state.generating) {

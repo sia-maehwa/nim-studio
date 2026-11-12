@@ -40,12 +40,15 @@ https://github.com/sia-maehwa/nim-studio/releases/download/rolling-latest/app-re
 7. **Hugging Face**: 하단 **Hugging Face** 탭에서 HF 토큰(`hf_...`)을 등록하면
    Inference Providers로 채팅·이미지 생성이 가능합니다. 모델 탐색 탭은 기본으로
    **실행 가능한 모델만** 표시하며(Provider live), Gated·배포 필요 상태도 구분합니다.
-   이미지는 fal-ai 큐(fal-ai/flux/dev 등)로 생성하고, Provider를 골라 채팅/이미지에
-   바로 사용할 수 있습니다. HF Inference Providers는 무료 계정에 월 크레딧이 없어
-   PRO($2/월) 또는 크레딧 구매가 필요하고, 토큰에
-   **Make calls to Inference Providers** 권한이 있어야 합니다. 전용 Inference Endpoint
-   (TGI/TEI, OpenAI 호환 또는 HF 네이티브)도 연결 설정 탭에서 등록·테스트할 수 있습니다.
-   HF 토큰은 NIM 키와 분리된 Keystore 별칭으로 암호화됩니다.
+   이미지는 fal-ai 큐(fal-ai/flux/dev 등)로 생성하고, 스텝 상한이 낮은 모델
+   (FLUX schnell·Z-Image Turbo 등)은 자동으로 맞춰 보냅니다. **이미지 편집** 필터에서
+   FLUX.2·Qwen-Image-Edit·Kontext 같은 참조 이미지 모델을 골라 갤러리 이미지를 넣고
+   편집할 수 있습니다(참조 이미지는 fal-ai만 지원). 채팅 Provider는 **자동(가장 빠른
+   Provider)** 이 기본이라 모델만 고르면 바로 사용할 수 있습니다. HF Inference
+   Providers는 무료 계정에 월 크레딧이 없어 PRO($2/월) 또는 크레딧 구매가 필요하고,
+   토큰에 **Make calls to Inference Providers** 권한이 있어야 합니다. 전용 Inference
+   Endpoint(TGI/TEI, OpenAI 호환 또는 HF 네이티브)도 연결 설정 탭에서 등록·테스트할 수
+   있습니다. HF 토큰은 NIM 키와 분리된 Keystore 별칭으로 암호화됩니다.
 8. **플러그인**: 설정 → 에이전트 플러그인에서 JSON 매니페스트로 HTTP 도구를 추가하면 에이전트가 호출합니다.
 
 ## 빌드
@@ -110,7 +113,7 @@ nim-studio/
 | 에이전트 컨텍스트 자동 압축 (입력이 약 20k 토큰에 도달하면 이전 기록을 요약·축약, opencode 방식) | M8 |
 | 인앱 셸 실행 (run_command: Android toybox, Termux 불필요, 설정에서 전체 파일 접근 허용 필요, 빌드 도구는 없음) | M9 |
 | NVIDIA 이미지 모델 404 수정 (문서에 없는 SD 3.5 Large를 지원 중단으로 표시·목록 제외, 404 시 payload 재시도 중단) | M10 |
-| Hugging Face 전용 화면 (Hub 검색, 실행 가능/Provider 미지원/Gated/배포 필요 구분, Provider 선택 채팅·이미지 생성, Endpoint/Custom GPU 연결, 라이브러리 자동 저장) | M10 |
+| Hugging Face 전용 화면 (Hub 검색, 실행 가능/Provider 미지원/Gated/배포 필요 구분, Provider 자동/선택 채팅, 이미지 생성·참조 이미지 편집, Endpoint/Custom GPU 연결, 라이브러리 자동 저장) | M10 |
 
 ## 보안
 

@@ -63,6 +63,19 @@ class HfLogicTest {
           {
             "id": "org/custom-model",
             "pipeline_tag": "text-generation"
+          },
+          {
+            "id": "Qwen/Qwen-Image-Edit",
+            "pipeline_tag": "image-to-image",
+            "gated": false,
+            "inferenceProviderMapping": [
+              {
+                "provider": "fal-ai",
+                "providerId": "fal-ai/qwen-image-edit",
+                "status": "live",
+                "task": "image-to-image"
+              }
+            ]
           }
         ]
     """.trimIndent()
@@ -70,7 +83,7 @@ class HfLogicTest {
     @Test
     fun parsesListMappingAndTasks() {
         val models = HfHub.parseModelList(listBody)
-        assertEquals(4, models.size)
+        assertEquals(5, models.size)
 
         val qwen = models[0]
         assertEquals(HfTask.Chat, qwen.task)
@@ -90,6 +103,17 @@ class HfLogicTest {
         assertEquals(
             HfAvailability.Ready,
             flux.availabilityFor(HfTask.TextToImage, tokenPresent = true),
+        )
+
+        val edit = models[4]
+        assertEquals(HfTask.ImageToImage, edit.task)
+        assertEquals(
+            HfAvailability.Ready,
+            edit.availabilityFor(HfTask.ImageToImage, tokenPresent = true),
+        )
+        assertEquals(
+            "fal-ai/qwen-image-edit",
+            edit.liveProviders(HfTask.ImageToImage).first().providerId,
         )
     }
 
@@ -183,10 +207,12 @@ class HfLogicTest {
 
         val fal = json.parseToJsonElement(
             HfPayloads.falImageRequest(
+                providerId = "fal-ai/flux/dev",
                 prompt = "a cat",
+                negativePrompt = "blurry",
                 width = 512,
                 height = 512,
-                steps = 4,
+                steps = 28,
                 seed = null,
                 guidance = null,
             ),
@@ -194,6 +220,99 @@ class HfLogicTest {
         assertEquals("a cat", fal["prompt"]!!.jsonPrimitive.content)
         assertEquals(512, fal["image_size"]!!.jsonObject["width"]!!.jsonPrimitive.content.toInt())
         assertFalse(fal.containsKey("seed"))
+        assertFalse(fal.containsKey("negative_prompt"))
+
+        val sdxl = json.parseToJsonElement(
+            HfPayloads.falImageRequest(
+                providerId = "fal-ai/fast-sdxl",
+                prompt = "a cat",
+                negativePrompt = "blurry",
+                width = 1024,
+                height = 1024,
+                steps = 28,
+                seed = 1L,
+                guidance = null,
+            ),
+        ).jsonObject
+        assertEquals("blurry", sdxl["negative_prompt"]!!.jsonPrimitive.content)
+
+        val schnell = json.parseToJsonElement(
+            HfPayloads.falImageRequest(
+                providerId = "fal-ai/flux/schnell",
+                prompt = "a cat",
+                negativePrompt = "",
+                width = 512,
+                height = 512,
+                steps = 28,
+                seed = null,
+                guidance = null,
+            ),
+        ).jsonObject
+        assertEquals(12, schnell["num_inference_steps"]!!.jsonPrimitive.content.toInt())
+
+        val zImage = json.parseToJsonElement(
+            HfPayloads.falImageRequest(
+                providerId = "fal-ai/z-image/turbo",
+                prompt = "a cat",
+                negativePrompt = "",
+                width = 512,
+                height = 512,
+                steps = 28,
+                seed = null,
+                guidance = null,
+            ),
+        ).jsonObject
+        assertEquals(8, zImage["num_inference_steps"]!!.jsonPrimitive.content.toInt())
+    }
+
+    @Test
+    fun buildsFalEditPayloads() {
+        val dataUrl = "data:image/jpeg;base64,AAAA"
+        val qwen = json.parseToJsonElement(
+            HfPayloads.falEditRequest(
+                providerId = "fal-ai/qwen-image-edit",
+                prompt = "edit it",
+                negativePrompt = "blurry",
+                imageDataUrl = dataUrl,
+                steps = 30,
+                seed = null,
+                guidance = null,
+            ),
+        ).jsonObject
+        assertEquals(dataUrl, qwen["image_url"]!!.jsonPrimitive.content)
+        assertFalse(qwen.containsKey("image_urls"))
+        assertEquals("blurry", qwen["negative_prompt"]!!.jsonPrimitive.content)
+
+        val flux2 = json.parseToJsonElement(
+            HfPayloads.falEditRequest(
+                providerId = "fal-ai/flux-2/edit",
+                prompt = "edit it",
+                negativePrompt = "blurry",
+                imageDataUrl = dataUrl,
+                steps = 28,
+                seed = null,
+                guidance = null,
+            ),
+        ).jsonObject
+        assertFalse(flux2.containsKey("image_url"))
+        assertEquals(
+            dataUrl,
+            flux2["image_urls"]!!.jsonArray.first()!!.jsonPrimitive.content,
+        )
+        assertFalse(flux2.containsKey("negative_prompt"))
+
+        val klein = json.parseToJsonElement(
+            HfPayloads.falEditRequest(
+                providerId = "fal-ai/flux-2/klein/4b/distilled/edit",
+                prompt = "edit it",
+                negativePrompt = "",
+                imageDataUrl = dataUrl,
+                steps = 28,
+                seed = null,
+                guidance = null,
+            ),
+        ).jsonObject
+        assertEquals(8, klein["num_inference_steps"]!!.jsonPrimitive.content.toInt())
     }
 
     @Test

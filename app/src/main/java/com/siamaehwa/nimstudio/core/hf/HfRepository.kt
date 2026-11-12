@@ -58,6 +58,7 @@ class HfRepository(
         steps: Int,
         seed: Long?,
         guidance: Double?,
+        referenceImage: ByteArray? = null,
     ): ByteArray = client.generateImage(
         token = token,
         model = model,
@@ -70,6 +71,7 @@ class HfRepository(
         steps = steps,
         seed = seed,
         guidance = guidance,
+        referenceImage = referenceImage,
     )
 
     suspend fun endpointGenerateImage(

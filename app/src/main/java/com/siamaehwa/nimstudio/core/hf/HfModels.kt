@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
@@ -20,6 +21,7 @@ import kotlinx.serialization.json.put
 enum class HfTask(val id: String, val label: String) {
     Chat("conversational", "채팅"),
     TextToImage("text-to-image", "텍스트→이미지"),
+    ImageToImage("image-to-image", "이미지 편집"),
     Unknown("", "알 수 없음"),
     ;
 
@@ -27,6 +29,7 @@ enum class HfTask(val id: String, val label: String) {
         fun fromId(id: String?): HfTask = when (id) {
             "conversational", "text-generation", "image-text-to-text" -> Chat
             "text-to-image" -> TextToImage
+            "image-to-image", "image-text-to-image" -> ImageToImage
             else -> Unknown
         }
     }
@@ -328,7 +331,9 @@ object HfPayloads {
     }.toString()
 
     fun falImageRequest(
+        providerId: String,
         prompt: String,
+        negativePrompt: String,
         width: Int,
         height: Int,
         steps: Int,
@@ -340,11 +345,76 @@ object HfPayloads {
             put("width", width)
             put("height", height)
         })
-        put("num_inference_steps", steps)
+        put("num_inference_steps", falTextSteps(providerId, steps))
+        if (negativePrompt.isNotBlank() && falSupportsNegative(providerId)) {
+            put("negative_prompt", negativePrompt)
+        }
         seed?.let { put("seed", it) }
         guidance?.let { put("guidance_scale", it) }
         put("enable_safety_checker", false)
     }.toString()
+
+    fun falEditRequest(
+        providerId: String,
+        prompt: String,
+        negativePrompt: String,
+        imageDataUrl: String,
+        steps: Int,
+        seed: Long?,
+        guidance: Double?,
+    ): String = buildJsonObject {
+        put("prompt", prompt)
+        putFalImageInput(providerId, imageDataUrl)
+        put("num_inference_steps", falEditSteps(providerId, steps))
+        if (negativePrompt.isNotBlank() && providerId.contains("qwen-image-edit")) {
+            put("negative_prompt", negativePrompt)
+        }
+        seed?.let { put("seed", it) }
+        guidance?.let { put("guidance_scale", it) }
+        put("enable_safety_checker", false)
+    }.toString()
+
+    fun minimalFalEditRequest(
+        providerId: String,
+        prompt: String,
+        imageDataUrl: String,
+    ): String = buildJsonObject {
+        put("prompt", prompt)
+        putFalImageInput(providerId, imageDataUrl)
+    }.toString()
+
+    fun falTextSteps(providerId: String, steps: Int): Int = when {
+        providerId.contains("flux/schnell") -> steps.coerceIn(1, 12)
+        providerId.contains("z-image/turbo") -> steps.coerceIn(1, 8)
+        else -> steps.coerceIn(1, 50)
+    }
+
+    fun falEditSteps(providerId: String, steps: Int): Int = when {
+        providerId.contains("flux-2/klein/4b") -> steps.coerceIn(4, 8)
+        providerId.contains("flux-kontext") -> steps.coerceIn(10, 50)
+        providerId.contains("qwen-image-edit-plus") -> steps.coerceIn(2, 100)
+        else -> steps.coerceIn(2, 50)
+    }
+
+    fun falSupportsNegative(providerId: String): Boolean =
+        providerId.contains("fast-sdxl") ||
+            (providerId.contains("qwen-image") && !providerId.contains("edit"))
+
+    fun falEditUsesImageUrls(providerId: String): Boolean =
+        providerId.startsWith("fal-ai/flux-2/") ||
+            providerId.contains("qwen-image-edit-plus") ||
+            providerId.contains("qwen-image-edit-2511")
+
+    private fun JsonObjectBuilder.putFalImageInput(
+        providerId: String,
+        imageDataUrl: String,
+    ) {
+        if (falEditUsesImageUrls(providerId)) {
+            put("image_urls", buildJsonArray { add(JsonPrimitive(imageDataUrl)) })
+        } else {
+            put("image_url", imageDataUrl)
+        }
+    }
 
     fun nativeChatRequest(
         messages: List<HfChatMessage>,

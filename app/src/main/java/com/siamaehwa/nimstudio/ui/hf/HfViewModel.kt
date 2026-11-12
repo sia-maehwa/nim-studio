@@ -8,6 +8,7 @@ import com.siamaehwa.nimstudio.core.hf.HfChatEvent
 import com.siamaehwa.nimstudio.core.hf.HfChatMessage
 import com.siamaehwa.nimstudio.core.hf.HfEndpointConfig
 import com.siamaehwa.nimstudio.core.hf.HfErrors
+import com.siamaehwa.nimstudio.core.hf.HfImageUtil
 import com.siamaehwa.nimstudio.core.hf.HfModelSummary
 import com.siamaehwa.nimstudio.core.hf.HfProviderEntry
 import com.siamaehwa.nimstudio.core.hf.HfSavedModel
@@ -49,7 +50,9 @@ data class HfUiState(
     val imageModel: String? = null,
     val imageProvider: String? = null,
     val imageProviderId: String? = null,
+    val imageTaskId: String = HfTask.TextToImage.id,
     val imageProviders: List<HfProviderEntry> = emptyList(),
+    val referenceImage: ByteArray? = null,
     val imagePrompt: String = "",
     val negative: String = "",
     val sizeIndex: Int = 0,
@@ -73,6 +76,7 @@ data class HfUiState(
 ) {
     val chatReady: Boolean get() = !chatModel.isNullOrBlank()
     val imageReady: Boolean get() = !imageModel.isNullOrBlank()
+    val imageNeedsReference: Boolean get() = imageTaskId == HfTask.ImageToImage.id
 }
 
 data class HfSize(val label: String, val width: Int, val height: Int)
@@ -154,6 +158,9 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
             repository.lastImageModel.collect { model ->
                 if (!model.isNullOrBlank()) {
                     _state.update { it.copy(imageModel = it.imageModel ?: model) }
+                    if (_state.value.imageProviderId.isNullOrBlank()) {
+                        hydrateImageModel(model)
+                    }
                 }
             }
         }
@@ -302,7 +309,7 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
                     _state.update { it.copy(opening = false) }
                     repository.recordTest(saved.id, ok = true, message = null)
                     val task = HfTask.fromId(saved.taskId)
-                    if (task == HfTask.TextToImage) {
+                    if (task == HfTask.TextToImage || task == HfTask.ImageToImage) {
                         selectForImage(model, saved.provider)
                     } else {
                         selectForChat(model, saved.provider)
@@ -318,7 +325,7 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
 
     fun selectForChat(model: HfModelSummary, preferred: String? = null) {
         val live = model.liveProviders(HfTask.Chat).map { it.provider }
-        val provider = preferred?.takeIf { it in live } ?: live.firstOrNull()
+        val provider = preferred?.takeIf { it in live }
         _state.update {
             it.copy(
                 chatModel = model.id,
@@ -337,7 +344,10 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun selectForImage(model: HfModelSummary, preferred: String? = null) {
-        val live = model.liveProviders(HfTask.TextToImage)
+        val textToImage = model.liveProviders(HfTask.TextToImage)
+        val imageToImage = model.liveProviders(HfTask.ImageToImage)
+        val task = if (textToImage.isNotEmpty()) HfTask.TextToImage else HfTask.ImageToImage
+        val live = if (task == HfTask.TextToImage) textToImage else imageToImage
         val supported = live.filter { it.provider in imageProviderOrder }
         val chosen = preferred?.let { name -> supported.firstOrNull { it.provider == name } }
             ?: supported.firstOrNull()
@@ -348,29 +358,65 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
                 imageProviders = live,
                 imageProvider = chosen?.provider,
                 imageProviderId = chosen?.providerId,
+                imageTaskId = task.id,
                 tab = 2,
                 imageError = null,
-                imageNotice = if (chosen == null) {
-                    "이 모델은 이미지 Provider가 없습니다. Endpoint로 배포해야 합니다."
-                } else if (chosen.provider !in imageProviderOrder) {
-                    "이 Provider(${chosen.provider})의 이미지 생성은 아직 지원하지 않습니다."
-                } else {
-                    null
+                imageNotice = when {
+                    chosen == null && task == HfTask.ImageToImage ->
+                        "이 모델은 이미지 편집 Provider가 없습니다. Endpoint로 배포해야 합니다."
+
+                    chosen == null ->
+                        "이 모델은 이미지 Provider가 없습니다. Endpoint로 배포해야 합니다."
+
+                    chosen.provider !in imageProviderOrder ->
+                        "이 Provider(${chosen.provider})의 이미지 생성은 아직 지원하지 않습니다."
+
+                    task == HfTask.ImageToImage ->
+                        "참조 이미지를 선택하고 편집 프롬프트를 입력하세요."
+
+                    else -> null
                 },
             )
         }
         viewModelScope.launch { repository.rememberImage(model.id, chosen?.provider) }
     }
 
+    private suspend fun hydrateImageModel(modelId: String) {
+        val details = runCatching {
+            repository.modelDetails(currentToken, modelId)
+        }.getOrNull() ?: return
+        if (_state.value.imageModel != modelId) return
+        val textToImage = details.liveProviders(HfTask.TextToImage)
+        val imageToImage = details.liveProviders(HfTask.ImageToImage)
+        val task = if (textToImage.isNotEmpty()) HfTask.TextToImage else HfTask.ImageToImage
+        val live = if (task == HfTask.TextToImage) textToImage else imageToImage
+        if (live.isEmpty()) return
+        val supported = live.filter { it.provider in imageProviderOrder }
+        val preferred = _state.value.imageProvider
+        val chosen = supported.firstOrNull { it.provider == preferred }
+            ?: supported.firstOrNull()
+            ?: live.firstOrNull()
+        _state.update {
+            it.copy(
+                imageProviders = live,
+                imageProvider = chosen?.provider ?: it.imageProvider,
+                imageProviderId = chosen?.providerId ?: it.imageProviderId,
+                imageTaskId = task.id,
+            )
+        }
+    }
+
     fun setChatProvider(provider: String) {
-        _state.update { it.copy(chatProvider = provider) }
+        val value = provider.takeIf { it.isNotBlank() }
+        _state.update { it.copy(chatProvider = value) }
         val model = _state.value.chatModel
         if (!model.isNullOrBlank()) {
-            viewModelScope.launch { repository.rememberChat(model, provider) }
+            viewModelScope.launch { repository.rememberChat(model, value) }
         }
     }
 
     fun setImageProvider(provider: String) {
+        if (provider.isBlank()) return
         val entry = _state.value.imageProviders.firstOrNull { it.provider == provider }
         _state.update {
             it.copy(
@@ -383,6 +429,39 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
         if (!model.isNullOrBlank()) {
             viewModelScope.launch { repository.rememberImage(model, provider) }
         }
+    }
+
+    fun setReferenceImage(bytes: ByteArray?) {
+        if (bytes == null || bytes.isEmpty()) {
+            _state.update {
+                it.copy(
+                    referenceImage = null,
+                    imageError = "참조 이미지를 읽을 수 없습니다.",
+                )
+            }
+            return
+        }
+        val compressed = HfImageUtil.compressForReference(bytes)
+        if (compressed == null) {
+            _state.update {
+                it.copy(
+                    referenceImage = null,
+                    imageError = "참조 이미지를 읽을 수 없습니다.",
+                )
+            }
+            return
+        }
+        _state.update {
+            it.copy(
+                referenceImage = compressed,
+                imageError = null,
+                imageNotice = "참조 이미지 준비 완료 · 편집 프롬프트를 입력하세요.",
+            )
+        }
+    }
+
+    fun clearReferenceImage() {
+        _state.update { it.copy(referenceImage = null) }
     }
 
     fun setChatInput(value: String) {
@@ -405,12 +484,6 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
         val endpointMode = _state.value.useEndpoint &&
             _state.value.endpointConfigured &&
             HfTask.fromId(_state.value.endpointTaskId) == HfTask.Chat
-        if (!endpointMode && _state.value.chatProvider.isNullOrBlank()) {
-            _state.update {
-                it.copy(chatError = "채팅 Provider가 없습니다. 다른 모델을 선택하세요.")
-            }
-            return
-        }
         val history = _state.value.chatMessages + HfChatMessage("user", text)
         _state.update {
             it.copy(
@@ -547,9 +620,14 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
             _state.value.endpointConfigured &&
             HfTask.fromId(_state.value.endpointTaskId) == HfTask.TextToImage
         val model = _state.value.imageModel
+        val imageTask = HfTask.fromId(_state.value.imageTaskId)
         if (!endpointMode) {
             if (model.isNullOrBlank()) {
                 _state.update { it.copy(imageError = "이미지 모델을 먼저 선택하세요.") }
+                return
+            }
+            if (imageTask == HfTask.ImageToImage && _state.value.referenceImage == null) {
+                _state.update { it.copy(imageError = "참조 이미지를 먼저 선택하세요.") }
                 return
             }
             if (_state.value.imageProvider !in imageProviderOrder) {
@@ -580,11 +658,25 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
                         seed = _state.value.seed.toLongOrNull(),
                     )
                 } else {
+                    var providerId = _state.value.imageProviderId
+                    if (providerId.isNullOrBlank() && !model.isNullOrBlank()) {
+                        providerId = runCatching {
+                            repository.modelDetails(token, model).providers
+                                .firstOrNull {
+                                    it.status == "live" &&
+                                        it.provider == _state.value.imageProvider
+                                }
+                                ?.providerId
+                        }.getOrNull()
+                        providerId?.let { resolved ->
+                            _state.update { it.copy(imageProviderId = resolved) }
+                        }
+                    }
                     repository.generateImage(
                         token = token,
                         model = model.orEmpty(),
                         provider = _state.value.imageProvider,
-                        providerId = _state.value.imageProviderId,
+                        providerId = providerId,
                         prompt = prompt,
                         negativePrompt = _state.value.negative.trim(),
                         width = size.width,
@@ -592,6 +684,11 @@ class HfViewModel(private val container: AppContainer) : ViewModel() {
                         steps = _state.value.steps,
                         seed = _state.value.seed.toLongOrNull(),
                         guidance = null,
+                        referenceImage = if (imageTask == HfTask.ImageToImage) {
+                            _state.value.referenceImage
+                        } else {
+                            null
+                        },
                     )
                 }
                 val saved = runCatching {

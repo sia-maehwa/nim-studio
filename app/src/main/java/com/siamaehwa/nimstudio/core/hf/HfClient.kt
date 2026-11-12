@@ -321,23 +321,24 @@ class HfClient {
         steps: Int,
         seed: Long?,
         guidance: Double?,
+        referenceImage: ByteArray? = null,
+        referenceMime: String = "image/jpeg",
     ): ByteArray = withContext(Dispatchers.IO) {
         val chosen = provider?.takeIf { it.isNotBlank() }
             ?: throw HfApiException(
                 400,
                 "이미지 생성 Provider를 선택하세요(hf-inference 또는 fal-ai).",
             )
+        val reference = referenceImage?.takeIf { it.isNotEmpty() }
+        if (reference != null && chosen != "fal-ai") {
+            throw HfApiException(
+                400,
+                "참조 이미지 편집은 fal-ai Provider에서만 지원합니다.",
+            )
+        }
         val fullHf = HfPayloads.imageRequest(
             prompt = prompt,
             negativePrompt = negativePrompt,
-            width = width,
-            height = height,
-            steps = steps,
-            seed = seed,
-            guidance = guidance,
-        )
-        val fullFal = HfPayloads.falImageRequest(
-            prompt = prompt,
             width = width,
             height = height,
             steps = steps,
@@ -353,10 +354,37 @@ class HfClient {
             "fal-ai" -> {
                 val alias = providerId?.takeIf { it.isNotBlank() }
                     ?: throw HfApiException(400, "fal-ai 모델 별칭(providerId)이 없습니다.")
-                listOf(
-                    "$ROUTER_BASE/fal-ai/$alias?_subdomain=queue" to
-                        listOf(fullFal, HfPayloads.minimalFalRequest(prompt)),
-                )
+                val payloads = if (reference != null) {
+                    val dataUrl = "data:$referenceMime;base64," +
+                        Base64.encodeToString(reference, Base64.NO_WRAP)
+                    listOf(
+                        HfPayloads.falEditRequest(
+                            providerId = alias,
+                            prompt = prompt,
+                            negativePrompt = negativePrompt,
+                            imageDataUrl = dataUrl,
+                            steps = steps,
+                            seed = seed,
+                            guidance = guidance,
+                        ),
+                        HfPayloads.minimalFalEditRequest(alias, prompt, dataUrl),
+                    )
+                } else {
+                    listOf(
+                        HfPayloads.falImageRequest(
+                            providerId = alias,
+                            prompt = prompt,
+                            negativePrompt = negativePrompt,
+                            width = width,
+                            height = height,
+                            steps = steps,
+                            seed = seed,
+                            guidance = guidance,
+                        ),
+                        HfPayloads.minimalFalRequest(prompt),
+                    )
+                }
+                listOf("$ROUTER_BASE/fal-ai/$alias?_subdomain=queue" to payloads)
             }
 
             else -> throw HfApiException(
@@ -552,10 +580,15 @@ class HfClient {
             ?: url.substringBefore('?')
         val (statusUrl, resultUrl) = falQueueUrls(responseUrl, url)
         var status = queue.status.orEmpty().uppercase()
+        var detail = ""
         val deadline = System.currentTimeMillis() + FAL_POLL_TIMEOUT_MS
         while (status != "COMPLETED") {
             if (status in FAL_FAILED_STATES) {
-                throw HfApiException(500, "fal-ai 이미지 생성 실패($status)")
+                val suffix = HfErrors.sanitize(detail).take(300)
+                    .takeIf { it.isNotBlank() }
+                    ?.let { ": $it" }
+                    .orEmpty()
+                throw HfApiException(500, "fal-ai 이미지 생성 실패($status)$suffix")
             }
             if (System.currentTimeMillis() >= deadline) {
                 throw IOException("fal-ai 이미지 생성 시간 초과(4분)")
@@ -563,6 +596,7 @@ class HfClient {
             delay(FAL_POLL_INTERVAL_MS)
             coroutineContext.ensureActive()
             val statusText = falGet(statusUrl, token)
+            detail = statusText
             status = runCatching {
                 json.decodeFromString(HfFalStatus.serializer(), statusText).status
             }.getOrNull().orEmpty().uppercase()
