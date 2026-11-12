@@ -37,7 +37,7 @@ class Workspace private constructor(
         private set
 
     /** /storage/... 절대 경로. 매핑할 수 없으면 null(셸 실행 불가). */
-    var fsPath: String?
+    var fsPath: String? = null
         private set
 
     companion object {
